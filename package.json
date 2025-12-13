@@ -1,0 +1,23 @@
+{
+  "name": "shiftcraft-api",
+  "version": "1.0.0",
+  "description": "backend for shiftcraft application for restaurant scheduling",
+  "license": "ISC",
+  "author": "Dimitri Njila",
+  "type": "module",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.87.1",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "pino": "^10.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
