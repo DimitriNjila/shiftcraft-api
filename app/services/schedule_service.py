@@ -3,7 +3,6 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from supabase import Client
 from ..core.db import supabase
-from ..core.config import settings
 
 
 class ScheduleAlreadyExistsError(Exception):
@@ -77,6 +76,56 @@ class ScheduleService:
 
         response = query.execute()
         return response.data
+
+    def get_schedule_by_id(self, schedule_id) -> Dict[str, Any]:
+        """
+        Get a specific schedule based on id
+
+        Args:
+            schedule_id: Retrieve specific n.
+
+
+        Returns:
+            List of schedule dictionaries
+
+        """
+
+        query = (
+            self.supabase.table(self.table_name).select("*").eq("id", str(schedule_id))
+        )
+        response = query.execute()
+
+        return response.data[0] if response.data else None
+
+    def get_schedule_with_shifts(self, schedule_id) -> Dict[str, Any]:
+        """
+        Get a schedule with all the shifts associated with it
+
+        Args:
+            schedule_id: Retrieve a specific schedule
+
+        Returns:
+            Singular schedule comprised of shifts and employee details
+
+        """
+
+        schedule = self.get_schedule_by_id(schedule_id)
+
+        if not schedule:
+            raise ScheduleNotFoundError(schedule_id)
+
+        shifts_response = (
+            self.supabase.table("shifts")
+            .select("*, employee(id, name, role)")
+            .eq("schedule_id", str(schedule_id))
+            .order("shift_date")
+            .order("start_time")
+            .execute()
+        )
+
+        schedule["shifts"] = shifts_response.data
+
+        return schedule
 
     def get_schedule_by_week(
         self, week_start: date, restaurant_id: UUID

@@ -1,10 +1,15 @@
 from pydantic import BaseModel
+from uuid import UUID
+from datetime import date
 
 
-class ScheduleModel(BaseModel):
-    id: int
-    week_start: str
+class ScheduleCreate(BaseModel):
     restaurant_id: str
+    week_start: date
+
+
+class ScheduleModel(ScheduleCreate):
+    id: UUID
 
 
 {
