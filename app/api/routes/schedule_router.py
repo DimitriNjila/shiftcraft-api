@@ -1,4 +1,4 @@
-from ...models.schedule_model import ScheduleModel, ScheduleCreate
+from ...models.schedule_model import ScheduleModel, ScheduleCreate, ScheduleResponse
 from datetime import date
 from ...services.schedule_service import (
     schedule_service,
@@ -24,6 +24,18 @@ def get_schedules(
     try:
         schedules = schedule_service.get_schedules(restaurant_id, start_date, end_date)
         return schedules
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred. Please try again later.",
+        )
+
+
+@schedule_router.get("/{schedule_id}", response_model=ScheduleResponse)
+def get_schedule(schedule_id: UUID):
+    try:
+        schedule = schedule_service.get_schedule_with_shifts(schedule_id)
+        return schedule
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

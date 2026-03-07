@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from uuid import UUID
-from datetime import date
+from datetime import date, time, datetime
+from typing import List, Optional
 
 
 class ScheduleCreate(BaseModel):
@@ -12,17 +13,39 @@ class ScheduleModel(ScheduleCreate):
     id: UUID
 
 
-{
-    "id": 1,
-    "week_start": "2025-01-06",
-    "shifts": [
-        {
-            "id": 101,
-            "employee": {"id": 5, "name": "Alice"},
-            "shift_date": "2025-01-06",
-            "start_time": "09:00:00",
-            "end_time": "17:00:00",
-            "duration_hours": 8.0,
-        }
-    ],
-}
+class EmployeeBasic(BaseModel):
+    """Embedded employee info in shift response"""
+
+    id: UUID
+    name: str
+    role: str
+
+
+class ShiftInSchedule(BaseModel):
+    """Shift as it appears in schedule response"""
+
+    id: UUID
+    shift_date: date
+    start_time: time
+    end_time: time
+    duration_hours: float
+    notes: Optional[str]
+    employee: EmployeeBasic
+
+    class Config:
+        from_attributes = True
+
+
+class ScheduleResponse(BaseModel):
+    """Complete schedule with all shifts"""
+
+    id: UUID
+    restaurant_id: str
+    week_start: date
+    created_at: datetime
+    shifts: List[ShiftInSchedule]
+    total_shifts: int = 0
+    total_hours: float = 0.0
+
+    class Config:
+        from_attributes = True

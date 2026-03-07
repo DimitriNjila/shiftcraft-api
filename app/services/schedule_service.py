@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from supabase import Client
@@ -107,6 +107,9 @@ class ScheduleService:
         Returns:
             Singular schedule comprised of shifts and employee details
 
+        Raises:
+            ScheduleNotFoundError if schedule does not exist
+
         """
 
         schedule = self.get_schedule_by_id(schedule_id)
@@ -125,7 +128,20 @@ class ScheduleService:
 
         schedule["shifts"] = shifts_response.data
 
+        schedule["total_shifts"] = len(shifts_response.data)
+        schedule["total_hours"] = sum(
+            self.calculate_duration(s["start_time"], s["end_time"])
+            for s in shifts_response.data
+        )
+
         return schedule
+
+    @staticmethod
+    def calculate_duration(start_time: str, end_time: str) -> float:
+        """Calculate hours between two time strings."""
+        start = datetime.strptime(start_time, "%H:%M:%S")
+        end = datetime.strptime(end_time, "%H:%M:%S")
+        return (end - start).total_seconds() / 3600
 
     def get_schedule_by_week(
         self, week_start: date, restaurant_id: UUID

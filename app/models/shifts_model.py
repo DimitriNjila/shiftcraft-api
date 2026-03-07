@@ -1,4 +1,3 @@
-# app/models/shift.py
 from datetime import date, time, datetime, timedelta
 from uuid import UUID
 from typing import Optional
@@ -42,5 +41,5 @@ class ShiftResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    employee: Optional[dict] = None
-    schedule: Optional[dict] = None
+    # employee: Optional[dict] = None
+    # schedule: Optional[dict] = None

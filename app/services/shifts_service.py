@@ -1,8 +1,8 @@
 from ..core.db import supabase
 from supabase import Client
 from typing import List, Optional, Dict, Any
-from schedule_service import schedule_service, ScheduleNotFoundError
-from employee_service import employee_service, EmployeeNotFoundError
+from .schedule_service import schedule_service, ScheduleNotFoundError
+from .employee_service import employee_service, EmployeeNotFoundError
 from uuid import UUID
 from datetime import datetime, date, time, timedelta
 
@@ -58,7 +58,8 @@ class ShiftsService:
             shift_date, start_time
         )
         duration_minutes = duration.total_seconds() / 60
-        return duration_minutes
+        # TODO change from hard coded value to restaurant specific max shift length
+        return duration_minutes < 600
 
     def validate_employee_can_work(employee_id: UUID):
         """Ensure employee exists and is active."""
@@ -87,6 +88,7 @@ class ShiftsService:
             )
 
     def check_for_overlapping_shifts(
+        self,
         employee_id: UUID,
         shift_date: date,
         start_time: time,
@@ -101,7 +103,7 @@ class ShiftsService:
         """
         # Query existing shifts for this employee on this date
         query = (
-            supabase.table("shifts")
+            self.supabase.table(self.table_name)
             .select("*")
             .eq("employee_id", str(employee_id))
             .eq("shift_date", shift_date.isoformat())
@@ -129,30 +131,28 @@ class ShiftsService:
 
     # === READ OPERATIONS ===
 
-    def get_shifts(
-        self,
-        employee_id: Optional[UUID] = None,
-        schedule_id: Optional[UUID] = None,
-        shift_date: Optional[date] = None,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        Get shifts with flexible filtering.
-        """
-        pass
+    # def get_shifts(
+    #     self,
+    #     employee_id: Optional[UUID] = None,
+    #     # schedule_id: Optional[UUID] = None,
+    #     shift_date: Optional[date] = None,
+    #     start_date: Optional[date] = None,
+    # ) -> List[Dict[str, Any]]:
+    #     """
+    #     Get shifts with flexible filtering.
+    #     """
+    #     query = self.supabase.table(self.table_name).select("*")
+
+    #     if employee_id is not None:
+    #         query = query.eq("employee_id", employee_id)
 
     def get_shift_by_id(self, shift_id: UUID) -> Optional[Dict[str, Any]]:
         """Get a single shift by ID."""
-        pass
 
-    # def get_shifts_for_week(
-    #     self,
-    #     week_start: date,
-    #     employee_id: Optional[UUID] = None
-    # ) -> List[Dict[str, Any]]:
-    #     """Convenience method for weekly view."""
-    #     pass
+        query = self.supabase.table(self.table_name).select("*").eq("id", str(shift_id))
+        response = query.execute()
+
+        return response.data[0] if response.data else None
 
     def get_employee_shifts(
         self, employee_id: UUID, start_date: date, end_date: date
@@ -185,7 +185,33 @@ class ShiftsService:
         Raises:
             ShiftValidationError: If any validation fails
         """
-        pass
+        self.validate_schedule_exists(schedule_id)
+        self.validate_employee_can_work(employee_id)
+        self.validate_date_in_schedule_week(schedule_id, shift_date)
+        self.validate_shift_times(start_time, end_time, shift_date)
+
+        overlapping_shifts = self.check_for_overlapping_shifts(
+            employee_id, shift_date, start_time, end_time
+        )
+        if overlapping_shifts:
+            raise OverlappingShiftError
+
+        shift_data = {
+            "schedule_id": str(schedule_id),
+            "employee_id": str(employee_id),
+            "date": shift_date.isoformat(),
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
+        response = self.supabase.table(self.table_name).insert(shift_data).execute()
+
+        if not response.data:
+            raise ShiftValidationError("Failed to create shift")
+
+        return response.data[0]
 
     # === UPDATE ===
 
@@ -202,11 +228,139 @@ class ShiftsService:
         Update an existing shift.
 
         Must re-validate overlap if employee/date/times change.
+
+        Args:
+            shift_id: ID of shift to update
+            employee_id: New employee (optional)
+            shift_date: New date (optional)
+            start_time: New start time (optional)
+            end_time: New end time (optional)
+            notes: New notes (optional)
+
+        Returns:
+            Updated shift dictionary
+
+        Raises:
+            ShiftNotFoundError: If shift doesn't exist
+            ShiftValidationError: If validation fails
+            EmployeeNotFoundError: If new employee doesn't exist
+            OverlappingShiftError: If update creates overlap
+
+        Validation logic:
+        1. Shift must exist
+        2. If any time/date/employee changes, re-validate:
+           - Times are valid (start < end, duration constraints)
+           - Within operating hours
+           - Date within schedule week
+           - Employee exists and is active
+           - No overlapping shifts
         """
-        pass
+        existing_shift = self.get_shift_by_id(shift_id)
+        if not existing_shift:
+            raise ShiftNotFoundError(shift_id)
+
+        update_data = {}
+
+        employee_changed = (
+            employee_id is not None
+            and str(employee_id) != existing_shift["employee_id"]
+        )
+        date_changed = (
+            shift_date is not None
+            and shift_date.isoformat() != existing_shift["shift_date"]
+        )
+        start_changed = (
+            start_time is not None and str(start_time) != existing_shift["start_time"]
+        )
+        end_changed = (
+            end_time is not None and str(end_time) != existing_shift["end_time"]
+        )
+
+        # Determine final values (new values override existing)
+        final_employee_id = (
+            employee_id
+            if employee_id is not None
+            else UUID(existing_shift["employee_id"])
+        )
+        final_shift_date = (
+            shift_date
+            if shift_date is not None
+            else datetime.fromisoformat(existing_shift["shift_date"]).date()
+        )
+        final_start_time = (
+            start_time
+            if start_time is not None
+            else datetime.strptime(existing_shift["start_time"], "%H:%M:%S").time()
+        )
+        final_end_time = (
+            end_time
+            if end_time is not None
+            else datetime.strptime(existing_shift["end_time"], "%H:%M:%S").time()
+        )
+
+        if employee_changed or date_changed or start_changed or end_changed:
+            # Validate employee exists and is active (if changed)
+            if employee_changed:
+                self.validate_employee_can_work(final_employee_id)
+
+            # Validate times
+            self.validate_shift_times(
+                final_start_time, final_end_time, final_shift_date
+            )
+
+            # # Validate within operating hours
+            # self._validate_within_operating_hours(final_shift_date, final_start_time, final_end_time)
+
+            # Validate date is within schedule week
+            schedule_id = UUID(existing_shift["schedule_id"])
+            self.validate_date_in_schedule_week(schedule_id, final_shift_date)
+
+            # Check for overlapping shifts (exclude current shift from check)
+            overlapping = self.check_for_overlapping_shifts(
+                employee_id=final_employee_id,
+                shift_date=final_shift_date,
+                start_time=final_start_time,
+                end_time=final_end_time,
+                exclude_shift_id=shift_id,  # Important: exclude this shift
+            )
+
+            if overlapping:
+                raise OverlappingShiftError(overlapping)
+
+        if employee_id is not None:
+            update_data["employee_id"] = str(employee_id)
+
+        if shift_date is not None:
+            update_data["shift_date"] = shift_date.isoformat()
+
+        if start_time is not None:
+            update_data["start_time"] = start_time.isoformat()
+
+        if end_time is not None:
+            update_data["end_time"] = end_time.isoformat()
+
+        if notes is not None:
+            update_data["notes"] = notes
+
+        if not update_data:
+            return existing_shift
+
+        update_data["updated_at"] = datetime.utcnow().isoformat()
+
+        response = (
+            self.supabase.table(self.table_name)
+            .update(update_data)
+            .eq("id", str(shift_id))
+            .execute()
+        )
+
+        return response.data[0]
 
     # === DELETE ===
 
     def delete_shift(self, shift_id: UUID) -> Dict[str, Any]:
         """Delete a shift."""
         pass
+
+
+shifts_service = ShiftsService(supabase)
