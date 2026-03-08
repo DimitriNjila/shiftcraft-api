@@ -21,6 +21,7 @@ shifts_router = APIRouter(
 def create_shift(shift: ShiftCreate):
     try:
         created_shift = shifts_service.create_shift(
+            schedule_id=shift.schedule_id,
             employee_id=shift.employee_id,
             shift_date=shift.shift_date,
             start_time=shift.start_time,

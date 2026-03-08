@@ -41,14 +41,14 @@ class ShiftsService:
         self.supabase = supabase_client
         self.table_name = "shifts"
 
-    def validate_schedule_exists(schedule_id: UUID):
+    def validate_schedule_exists(self, schedule_id: UUID):
         """Ensure schedule exists before adding shifts to it."""
         schedule = schedule_service.get_schedule_by_id(schedule_id)
         if not schedule:
             raise ScheduleNotFoundError(schedule_id)
         return schedule
 
-    def validate_shift_times(start_time: time, end_time: time, shift_date: date):
+    def validate_shift_times(self, start_time: time, end_time: time, shift_date: date):
         """Validate shift start/end times are logical."""
         if start_time >= end_time:
             raise ShiftValidationError("End time must be after start time")
@@ -61,7 +61,7 @@ class ShiftsService:
         # TODO change from hard coded value to restaurant specific max shift length
         return duration_minutes < 600
 
-    def validate_employee_can_work(employee_id: UUID):
+    def validate_employee_can_work(self, employee_id: UUID):
         """Ensure employee exists and is active."""
 
         employee = employee_service.get_employee_by_id(employee_id)
@@ -75,7 +75,7 @@ class ShiftsService:
 
         return employee
 
-    def validate_date_in_schedule_week(schedule_id: UUID, shift_date: date):
+    def validate_date_in_schedule_week(self, schedule_id: UUID, shift_date: date):
         """Ensure shift date falls within the schedule's week."""
         schedule = schedule_service.get_schedule_by_id(schedule_id)
         week_start = datetime.strptime(schedule["week_start"], "%Y-%m-%d").date()
@@ -178,7 +178,7 @@ class ShiftsService:
         1. Schedule exists
         2. Employee exists and is active
         3. Date is within schedule week
-        4. Times are valid (TODO)
+        4. Times are valid
         5. Within operating hours (TODO)
         6. No overlapping shifts
 
@@ -199,9 +199,10 @@ class ShiftsService:
         shift_data = {
             "schedule_id": str(schedule_id),
             "employee_id": str(employee_id),
-            "date": shift_date.isoformat(),
+            "shift_date": shift_date.isoformat(),
             "start_time": start_time.isoformat(),
             "end_time": end_time.isoformat(),
+            "notes": notes.strip() if notes else None,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }

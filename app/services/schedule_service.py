@@ -119,20 +119,33 @@ class ScheduleService:
 
         shifts_response = (
             self.supabase.table("shifts")
-            .select("*, employee(id, name, role)")
+            .select("*, employee:employees(id, name, role)")
             .eq("schedule_id", str(schedule_id))
             .order("shift_date")
             .order("start_time")
             .execute()
         )
 
-        schedule["shifts"] = shifts_response.data
+        # Calculate duration for each shift
+        shifts = []
+        total_hours = 0
 
-        schedule["total_shifts"] = len(shifts_response.data)
-        schedule["total_hours"] = sum(
-            self.calculate_duration(s["start_time"], s["end_time"])
-            for s in shifts_response.data
-        )
+        for shift in shifts_response.data:
+            # Calculate duration
+            start = datetime.strptime(shift["start_time"], "%H:%M:%S")
+            end = datetime.strptime(shift["end_time"], "%H:%M:%S")
+            duration = (end - start).total_seconds() / 3600
+
+            # Add computed field
+            shift["duration_hours"] = round(duration, 2)
+            total_hours += duration
+
+            shifts.append(shift)
+
+            # Attach shifts to schedule
+            schedule["shifts"] = shifts
+            schedule["total_shifts"] = len(shifts)
+            schedule["total_hours"] = round(total_hours, 2)
 
         return schedule
 

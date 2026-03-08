@@ -1,7 +1,7 @@
 from datetime import date, time, datetime, timedelta
 from uuid import UUID
 from typing import Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, Field
 
 
 class ShiftCreate(BaseModel):
@@ -33,13 +33,17 @@ class ShiftResponse(BaseModel):
     id: UUID
     schedule_id: UUID
     employee_id: UUID
-    shift_date: date
+    shift_date: date = Field(..., alias="date")
     start_time: time
     end_time: time
     notes: Optional[str]
-    duration_hours: float
+    # duration_hours: float
     created_at: datetime
     updated_at: datetime
+
+    model_config = {
+        "populate_by_name": True  # Allow both 'date' and 'shift_date'
+    }
 
     # employee: Optional[dict] = None
     # schedule: Optional[dict] = None
