@@ -270,3 +270,12 @@ class ScheduleService:
 
 
 schedule_service = ScheduleService(supabase)
+
+
+class ScheduleGenerator:
+    """
+    Schedule Generator algorithm which handles shifts creation and assignment based on constraints
+    """
+
+    def __init__(self, supabase_client: Client):
+        self.supabase = supabase_client

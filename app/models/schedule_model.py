@@ -32,9 +32,6 @@ class ShiftInSchedule(BaseModel):
     notes: Optional[str]
     employee: EmployeeBasic
 
-    class Config:
-        from_attributes = True
-
 
 class ScheduleResponse(BaseModel):
     """Complete schedule with all shifts"""
@@ -46,6 +43,3 @@ class ScheduleResponse(BaseModel):
     shifts: List[ShiftInSchedule]
     total_shifts: int = 0
     total_hours: float = 0.0
-
-    class Config:
-        from_attributes = True

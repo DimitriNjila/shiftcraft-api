@@ -4,8 +4,7 @@ from ..api.main import app
 client = TestClient(app)
 
 
-def test_employee_retrieval(employee_service):
-
-    response = client.get("/employee")
+def test_root_endpoint():
+    response = client.get("/")
     assert response.status_code == 200
-    assert isinstance(response.json(), list)
+    assert response.json()["Hello"] == "World"
