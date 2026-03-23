@@ -26,7 +26,7 @@ class ScheduleNotFoundError(Exception):
 
 
 class ScheduleService:
-    """Service for managing weekly bellagios Schedules"""
+    """Service for managing weekly Schedules"""
 
     def __init__(self, supabase_client: Client):
         self.supabase = supabase_client

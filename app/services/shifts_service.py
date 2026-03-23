@@ -160,8 +160,6 @@ class ShiftsService:
         """Get all shifts for an employee in a date range."""
         pass
 
-    # === CREATE ===
-
     def create_shift(
         self,
         schedule_id: UUID,
@@ -213,8 +211,6 @@ class ShiftsService:
             raise ShiftValidationError("Failed to create shift")
 
         return response.data[0]
-
-    # === UPDATE ===
 
     def update_shift(
         self,
@@ -277,7 +273,7 @@ class ShiftsService:
             end_time is not None and str(end_time) != existing_shift["end_time"]
         )
 
-        # Determine final values (new values override existing)
+        # Determine final values for validation
         final_employee_id = (
             employee_id
             if employee_id is not None
@@ -300,11 +296,11 @@ class ShiftsService:
         )
 
         if employee_changed or date_changed or start_changed or end_changed:
-            # Validate employee exists and is active (if changed)
+            # Validate employee exists and is active
             if employee_changed:
                 self.validate_employee_can_work(final_employee_id)
 
-            # Validate times
+            # Validate shift times
             self.validate_shift_times(
                 final_start_time, final_end_time, final_shift_date
             )
@@ -322,7 +318,7 @@ class ShiftsService:
                 shift_date=final_shift_date,
                 start_time=final_start_time,
                 end_time=final_end_time,
-                exclude_shift_id=shift_id,  # Important: exclude this shift
+                exclude_shift_id=shift_id,
             )
 
             if overlapping:
