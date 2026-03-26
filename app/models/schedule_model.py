@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import date, time, datetime
 from typing import List, Optional
@@ -43,3 +43,21 @@ class ScheduleResponse(BaseModel):
     shifts: List[ShiftInSchedule]
     total_shifts: int = 0
     total_hours: float = 0.0
+
+
+class ShiftTemplate(BaseModel):
+    """Template for a shift to be created."""
+
+    day_of_week: int = Field(..., ge=1, le=7, description="1=Monday, 7=Sunday")
+    start_time: str = Field(..., description="HH:MM:SS format")
+    end_time: str = Field(..., description="HH:MM:SS format")
+    role: str = Field(..., description="Employee role required")
+    count: int = Field(default=1, ge=1, description="Number of employees needed")
+
+
+class GenerateScheduleRequest(BaseModel):
+    """Request to generate a schedule."""
+
+    week_start: date = Field(..., description="Monday of the week to schedule")
+    restaurant_id: str
+    shift_templates: List[ShiftTemplate]

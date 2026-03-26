@@ -1,6 +1,135 @@
 from enum import Enum
 from datetime import time
 
+BELLAGIOS_SHIFT_TEMPLATES = [
+    {
+        "day_of_week": 2,  # Tuesday
+        "start_time": "16:00:00",
+        "end_time": "20:00:00",
+        "role": "Server",
+        "count": 1,
+    },
+    {
+        "day_of_week": 2,  # Tuesday
+        "start_time": "11:00:00",
+        "end_time": "20:00:00",
+        "role": "Cook",
+        "count": 1,
+    },
+    {
+        "day_of_week": 3,  # Wednesday
+        "start_time": "11:00:00",
+        "end_time": "20:00:00",
+        "role": "Server",
+        "count": 1,
+    },
+    {
+        "day_of_week": 3,  # Wednesday
+        "start_time": "11:00:00",
+        "end_time": "16:00:00",
+        "role": "Cook",
+        "count": 2,
+    },
+    {
+        "day_of_week": 3,  # Wednesday
+        "start_time": "16:00:00",
+        "end_time": "20:00:00",
+        "role": "Cook",
+        "count": 2,
+    },
+    {
+        "day_of_week": 4,  # Thursday
+        "start_time": "11:00:00",
+        "end_time": "16:00:00",
+        "role": "Server",
+        "count": 1,
+    },
+    {
+        "day_of_week": 4,  # Thursday
+        "start_time": "11:00:00",
+        "end_time": "16:00:00",
+        "role": "Cook",
+        "count": 1,
+    },
+    {
+        "day_of_week": 4,  # Thursday
+        "start_time": "16:00:00",
+        "end_time": "20:00:00",
+        "role": "Cook",
+        "count": 2,
+    },
+    {
+        "day_of_week": 5,  # Friday
+        "start_time": "11:00:00",
+        "end_time": "16:00:00",
+        "role": "Server",
+        "count": 1,
+    },
+    {
+        "day_of_week": 5,  # Friday
+        "start_time": "16:00:00",
+        "end_time": "21:00:00",
+        "role": "Server",
+        "count": 1,
+    },
+    {
+        "day_of_week": 5,  # Friday
+        "start_time": "11:00:00",
+        "end_time": "16:00:00",
+        "role": "Cook",
+        "count": 1,
+    },
+    {
+        "day_of_week": 5,  # Friday
+        "start_time": "16:00:00",
+        "end_time": "21:00:00",
+        "role": "Cook",
+        "count": 2,
+    },
+    {
+        "day_of_week": 6,  # Saturday
+        "start_time": "11:00:00",
+        "end_time": "16:00:00",
+        "role": "Server",
+        "count": 1,
+    },
+    {
+        "day_of_week": 6,  # Saturday
+        "start_time": "11:00:00",
+        "end_time": "16:00:00",
+        "role": "Cook",
+        "count": 1,
+    },
+    {
+        "day_of_week": 6,  # Saturday
+        "start_time": "16:00:00",
+        "end_time": "21:00:00",
+        "role": "Server",
+        "count": 1,
+    },
+    {
+        "day_of_week": 6,  # Saturday
+        "start_time": "16:00:00",
+        "end_time": "21:00:00",
+        "role": "Cook",
+        "count": 2,
+    },
+    {
+        "day_of_week": 7,  # Sunday
+        "start_time": "12:00:00",
+        "end_time": "18:00:00",
+        "role": "Server",
+        "count": 1,
+    },
+    {
+        "day_of_week": 7,  # Sunday
+        "start_time": "12:00:00",
+        "end_time": "18:00:00",
+        "role": "Cook",
+        "count": 1,
+    },
+]
+
 
 class DayOfWeek(int, Enum):
     """ISO 8601 weekdays (Monday=1, Sunday=7)."""

@@ -1,10 +1,13 @@
-from ...models.schedule_model import ScheduleModel, ScheduleCreate, ScheduleResponse
-from datetime import date
-from ...services.schedule_service import (
-    schedule_service,
-    ScheduleAlreadyExistsError,
-    ScheduleNotFoundError,
+from ...models.schedule_model import (
+    GenerateScheduleRequest,
+    ScheduleModel,
+    ScheduleCreate,
+    ScheduleResponse,
 )
+from datetime import date
+from ...services.schedule_service import schedule_service
+from ...services.schedule_generator_service import schedule_generator
+from ...core.constants import BELLAGIOS_SHIFT_TEMPLATES
 from fastapi import APIRouter, HTTPException, status
 from uuid import UUID
 
@@ -49,3 +52,19 @@ def create_schedule(schedule: ScheduleCreate):
         return schedule
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@schedule_router.post("/generate", response_model=ScheduleResponse)
+def generate_schedule(request: GenerateScheduleRequest):
+    try:
+        schedule = schedule_generator.generate_schedule(
+            restaurant_id=request.restaurant_id, week_start=request.week_start
+        )
+        return schedule
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate schedule: {str(e)}",
+        )

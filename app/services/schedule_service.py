@@ -131,12 +131,10 @@ class ScheduleService:
         total_hours = 0
 
         for shift in shifts_response.data:
-            # Calculate duration
             start = datetime.strptime(shift["start_time"], "%H:%M:%S")
             end = datetime.strptime(shift["end_time"], "%H:%M:%S")
             duration = (end - start).total_seconds() / 3600
 
-            # Add computed field
             shift["duration_hours"] = round(duration, 2)
             total_hours += duration
 
@@ -270,12 +268,3 @@ class ScheduleService:
 
 
 schedule_service = ScheduleService(supabase)
-
-
-class ScheduleGenerator:
-    """
-    Schedule Generator algorithm which handles shifts creation and assignment based on constraints
-    """
-
-    def __init__(self, supabase_client: Client):
-        self.supabase = supabase_client
