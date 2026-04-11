@@ -54,7 +54,7 @@ def create_schedule(schedule: ScheduleCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@schedule_router.post("/generate", response_model=ScheduleResponse)
+@schedule_router.post("/generate")
 def generate_schedule(request: GenerateScheduleRequest):
     try:
         schedule = schedule_generator.generate_schedule(

@@ -39,10 +39,8 @@ class ScheduleResponse(BaseModel):
     id: UUID
     restaurant_id: str
     week_start: date
-    created_at: datetime
-    shifts: List[ShiftInSchedule]
     total_shifts: int = 0
-    total_hours: float = 0.0
+    status: str = "Pending"
 
 
 class ShiftTemplate(BaseModel):

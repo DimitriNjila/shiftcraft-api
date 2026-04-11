@@ -3,126 +3,126 @@ from datetime import time
 
 BELLAGIOS_SHIFT_TEMPLATES = [
     {
-        "day_of_week": 2,  # Tuesday
+        "day_of_week": 2,
         "start_time": "16:00:00",
         "end_time": "20:00:00",
         "role": "Server",
         "count": 1,
     },
     {
-        "day_of_week": 2,  # Tuesday
+        "day_of_week": 2,
         "start_time": "11:00:00",
         "end_time": "20:00:00",
         "role": "Cook",
         "count": 1,
     },
     {
-        "day_of_week": 3,  # Wednesday
+        "day_of_week": 3,
         "start_time": "11:00:00",
         "end_time": "20:00:00",
         "role": "Server",
         "count": 1,
     },
     {
-        "day_of_week": 3,  # Wednesday
+        "day_of_week": 3,
         "start_time": "11:00:00",
         "end_time": "16:00:00",
         "role": "Cook",
         "count": 2,
     },
     {
-        "day_of_week": 3,  # Wednesday
+        "day_of_week": 3,
         "start_time": "16:00:00",
         "end_time": "20:00:00",
         "role": "Cook",
         "count": 2,
     },
     {
-        "day_of_week": 4,  # Thursday
+        "day_of_week": 4,
         "start_time": "11:00:00",
         "end_time": "16:00:00",
         "role": "Server",
         "count": 1,
     },
     {
-        "day_of_week": 4,  # Thursday
+        "day_of_week": 4,
         "start_time": "11:00:00",
         "end_time": "16:00:00",
         "role": "Cook",
         "count": 1,
     },
     {
-        "day_of_week": 4,  # Thursday
+        "day_of_week": 4,
         "start_time": "16:00:00",
         "end_time": "20:00:00",
         "role": "Cook",
         "count": 2,
     },
     {
-        "day_of_week": 5,  # Friday
+        "day_of_week": 5,
         "start_time": "11:00:00",
         "end_time": "16:00:00",
         "role": "Server",
         "count": 1,
     },
     {
-        "day_of_week": 5,  # Friday
+        "day_of_week": 5,
         "start_time": "16:00:00",
         "end_time": "21:00:00",
         "role": "Server",
         "count": 1,
     },
     {
-        "day_of_week": 5,  # Friday
+        "day_of_week": 5,
         "start_time": "11:00:00",
         "end_time": "16:00:00",
         "role": "Cook",
         "count": 1,
     },
     {
-        "day_of_week": 5,  # Friday
+        "day_of_week": 5,
         "start_time": "16:00:00",
         "end_time": "21:00:00",
         "role": "Cook",
         "count": 2,
     },
     {
-        "day_of_week": 6,  # Saturday
+        "day_of_week": 6,
         "start_time": "11:00:00",
         "end_time": "16:00:00",
         "role": "Server",
         "count": 1,
     },
     {
-        "day_of_week": 6,  # Saturday
+        "day_of_week": 6,
         "start_time": "11:00:00",
         "end_time": "16:00:00",
         "role": "Cook",
         "count": 1,
     },
     {
-        "day_of_week": 6,  # Saturday
+        "day_of_week": 6,
         "start_time": "16:00:00",
         "end_time": "21:00:00",
         "role": "Server",
         "count": 1,
     },
     {
-        "day_of_week": 6,  # Saturday
+        "day_of_week": 6,
         "start_time": "16:00:00",
         "end_time": "21:00:00",
         "role": "Cook",
         "count": 2,
     },
     {
-        "day_of_week": 7,  # Sunday
+        "day_of_week": 7,
         "start_time": "12:00:00",
         "end_time": "18:00:00",
         "role": "Server",
         "count": 1,
     },
     {
-        "day_of_week": 7,  # Sunday
+        "day_of_week": 7,
         "start_time": "12:00:00",
         "end_time": "18:00:00",
         "role": "Cook",

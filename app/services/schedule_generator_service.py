@@ -115,7 +115,13 @@ class ScheduleGenerator:
 
                     continue
 
-        return self.schedule_service.get_schedule_with_shifts(schedule["id"])
+        return {
+            "id": schedule["id"],
+            "restaurant_id": schedule["restaurant_id"],
+            "week_start": schedule["week_start"],
+            "total_shifts": len(created_shifts),
+            "status": "Completed",
+        }
 
     @staticmethod
     def select_employee_with_least_hours(
