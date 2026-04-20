@@ -1,7 +1,7 @@
 from collections import defaultdict
 from datetime import date, time, timedelta, datetime
 from typing import List, Dict, Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 from supabase import Client
 from ..core.db import supabase
 from .employee_service import EmployeeService
@@ -68,13 +68,11 @@ class ScheduleGenerator:
 
         for template in shift_templates:
             day_of_week = template["day_of_week"]
-            start_time_str = template["start_time"]
-            end_time_str = template["end_time"]
+            start_time = self.parse_time(template["start_time"])
+            end_time = self.parse_time(template["end_time"])
             role = template["role"]
             count = template.get("count", 1)
 
-            start_time = self.parse_time(start_time_str)
-            end_time = self.parse_time(end_time_str)
 
             shift_date = week_start + timedelta(days=day_of_week - 1)
 
@@ -95,25 +93,27 @@ class ScheduleGenerator:
                     print(f"WARNING: Not enough employees for role '{role}'")
                     break
 
-                try:
-                    shift = self.shift_service.create_shift(
-                        schedule_id=schedule["id"],
-                        employee_id=employee["id"],
-                        shift_date=shift_date,
-                        start_time=start_time,
-                        end_time=end_time,
-                        notes=f"{role}",
-                    )
+                shift_data = {
+                "id": str(uuid4()),  
+                "schedule_id": str(schedule['id']),
+                "employee_id": str(employee['id']),
+                "shift_date": shift_date.isoformat(),
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "notes": f"{role}",
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
 
-                    created_shifts.append(shift)
+                created_shifts.append(shift_data)
 
-                    duration = self.calculate_duration(start_time, end_time)
-                    employee_hours[employee["id"]] += duration
+                duration = self.calculate_duration(start_time, end_time)
+                employee_hours[employee["id"]] += duration
+                    
+        if created_shifts:
+            self.supabase.table("shifts").insert(created_shifts).execute()
 
-                except Exception as e:
-                    print(f"ERROR creating shift: {e}")
 
-                    continue
 
         return {
             "id": schedule["id"],
@@ -151,3 +151,141 @@ class ScheduleGenerator:
 
 
 schedule_generator = ScheduleGenerator(supabase)
+
+# // example request:
+# curl -X 'POST' \
+#   'http://localhost:8000/schedules/generate' \
+#   -H 'accept: application/json' \
+#   -H 'Content-Type: application/json' \
+#   -d '{
+#   "week_start": "2026-04-20",
+#   "restaurant_id": "4fadbd49-40ab-4105-a670-f7906722beac",
+#   "shift_templates": [
+#     {
+#         "day_of_week": 2,
+#         "start_time": "16:00:00",
+#         "end_time": "20:00:00",
+#         "role": "Server",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 2,
+#         "start_time": "11:00:00",
+#         "end_time": "20:00:00",
+#         "role": "Cook",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 3,
+#         "start_time": "11:00:00",
+#         "end_time": "20:00:00",
+#         "role": "Server",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 3,
+#         "start_time": "11:00:00",
+#         "end_time": "16:00:00",
+#         "role": "Cook",
+#         "count": 2
+#     },
+#     {
+#         "day_of_week": 3,
+#         "start_time": "16:00:00",
+#         "end_time": "20:00:00",
+#         "role": "Cook",
+#         "count": 2
+#     },
+#     {
+#         "day_of_week": 4,
+#         "start_time": "11:00:00",
+#         "end_time": "16:00:00",
+#         "role": "Server",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 4,
+#         "start_time": "11:00:00",
+#         "end_time": "16:00:00",
+#         "role": "Cook",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 4,
+#         "start_time": "16:00:00",
+#         "end_time": "20:00:00",
+#         "role": "Cook",
+#         "count": 2
+#     },
+#     {
+#         "day_of_week": 5,
+#         "start_time": "11:00:00",
+#         "end_time": "16:00:00",
+#         "role": "Server",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 5,
+#         "start_time": "16:00:00",
+#         "end_time": "21:00:00",
+#         "role": "Server",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 5,
+#         "start_time": "11:00:00",
+#         "end_time": "16:00:00",
+#         "role": "Cook",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 5,
+#         "start_time": "16:00:00",
+#         "end_time": "21:00:00",
+#         "role": "Cook",
+#         "count": 2
+#     },
+#     {
+#         "day_of_week": 6,
+#         "start_time": "11:00:00",
+#         "end_time": "16:00:00",
+#         "role": "Server",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 6,
+#         "start_time": "11:00:00",
+#         "end_time": "16:00:00",
+#         "role": "Cook",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 6,
+#         "start_time": "16:00:00",
+#         "end_time": "21:00:00",
+#         "role": "Server",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 6,
+#         "start_time": "16:00:00",
+#         "end_time": "21:00:00",
+#         "role": "Cook",
+#         "count": 2
+#     },
+#     {
+#         "day_of_week": 7,
+#         "start_time": "12:00:00",
+#         "end_time": "18:00:00",
+#         "role": "Server",
+#         "count": 1
+#     },
+#     {
+#         "day_of_week": 7,
+#         "start_time": "12:00:00",
+#         "end_time": "18:00:00",
+#         "role": "Cook",
+#         "count": 1
+#     }
+#   ]
+# }'
