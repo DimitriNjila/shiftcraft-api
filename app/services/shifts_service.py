@@ -1,3 +1,5 @@
+import logging
+
 from ..core.db import supabase
 from supabase import Client
 from typing import List, Optional, Dict, Any
@@ -5,6 +7,8 @@ from .schedule_service import schedule_service, ScheduleNotFoundError
 from .employee_service import employee_service, EmployeeNotFoundError
 from uuid import UUID
 from datetime import datetime, date, time, timedelta
+
+logger = logging.getLogger(__name__)
 
 
 class ShiftValidationError(Exception):
@@ -43,14 +47,24 @@ class ShiftsService:
 
     def validate_schedule_exists(self, schedule_id: UUID):
         """Ensure schedule exists before adding shifts to it."""
+        logger.debug("Validating schedule exists id=%s", schedule_id)
         schedule = schedule_service.get_schedule_by_id(schedule_id)
         if not schedule:
+            logger.error("Schedule not found id=%s", schedule_id)
             raise ScheduleNotFoundError(schedule_id)
         return schedule
 
     def validate_shift_times(self, start_time: time, end_time: time, shift_date: date):
         """Validate shift start/end times are logical."""
+        logger.debug(
+            "Validating shift times: %s - %s on %s", start_time, end_time, shift_date
+        )
         if start_time >= end_time:
+            logger.error(
+                "Invalid shift times: end_time %s is not after start_time %s",
+                end_time,
+                start_time,
+            )
             raise ShiftValidationError("End time must be after start time")
 
         # Calculate duration
@@ -58,17 +72,22 @@ class ShiftsService:
             shift_date, start_time
         )
         duration_minutes = duration.total_seconds() / 60
+        logger.debug("Shift duration: %.0f minutes", duration_minutes)
         # TODO change from hard coded value to restaurant specific max shift length
         return duration_minutes < 600
 
     def validate_employee_can_work(self, employee_id: UUID):
         """Ensure employee exists and is active."""
-
+        logger.debug("Validating employee can work id=%s", employee_id)
         employee = employee_service.get_employee_by_id(employee_id)
         if not employee:
+            logger.error("Employee not found id=%s", employee_id)
             raise EmployeeNotFoundError(employee_id)
 
         if not employee.get("is_active"):
+            logger.error(
+                "Employee %s (id=%s) is inactive", employee.get("name"), employee_id
+            )
             raise ShiftValidationError(
                 f"Cannot assign shifts to inactive employee {employee['name']}"
             )
@@ -81,7 +100,19 @@ class ShiftsService:
         week_start = datetime.strptime(schedule["week_start"], "%Y-%m-%d").date()
         week_end = week_start + timedelta(days=6)
 
+        logger.debug(
+            "Validating shift_date=%s within week %s to %s",
+            shift_date,
+            week_start,
+            week_end,
+        )
         if not (week_start <= shift_date <= week_end):
+            logger.error(
+                "Shift date %s is outside schedule week %s to %s",
+                shift_date,
+                week_start,
+                week_end,
+            )
             raise ShiftValidationError(
                 f"Shift date {shift_date} must be within schedule week "
                 f"({week_start} to {week_end})"
@@ -101,6 +132,9 @@ class ShiftsService:
         Returns:
             List of overlapping shifts (empty if no conflicts)
         """
+        logger.debug(
+            "Checking overlaps for employee_id=%s on %s", employee_id, shift_date
+        )
         # Query existing shifts for this employee on this date
         query = (
             self.supabase.table(self.table_name)
@@ -127,32 +161,28 @@ class ShiftsService:
             if start_time < existing_end and existing_start < end_time:
                 overlapping.append(shift)
 
+        if overlapping:
+            logger.warning(
+                "Found %d overlapping shift(s) for employee_id=%s on %s",
+                len(overlapping),
+                employee_id,
+                shift_date,
+            )
         return overlapping
 
     # === READ OPERATIONS ===
 
-    # def get_shifts(
-    #     self,
-    #     employee_id: Optional[UUID] = None,
-    #     # schedule_id: Optional[UUID] = None,
-    #     shift_date: Optional[date] = None,
-    #     start_date: Optional[date] = None,
-    # ) -> List[Dict[str, Any]]:
-    #     """
-    #     Get shifts with flexible filtering.
-    #     """
-    #     query = self.supabase.table(self.table_name).select("*")
-
-    #     if employee_id is not None:
-    #         query = query.eq("employee_id", employee_id)
-
     def get_shift_by_id(self, shift_id: UUID) -> Optional[Dict[str, Any]]:
         """Get a single shift by ID."""
-
+        logger.debug("Looking up shift id=%s", shift_id)
         query = self.supabase.table(self.table_name).select("*").eq("id", str(shift_id))
         response = query.execute()
 
-        return response.data[0] if response.data else None
+        if response.data:
+            logger.info("Shift found id=%s", shift_id)
+            return response.data[0]
+        logger.warning("Shift not found id=%s", shift_id)
+        return None
 
     def get_employee_shifts(
         self, employee_id: UUID, start_date: date, end_date: date
@@ -183,6 +213,13 @@ class ShiftsService:
         Raises:
             ShiftValidationError: If any validation fails
         """
+        logger.info(
+            "Creating shift: employee_id=%s date=%s %s-%s",
+            employee_id,
+            shift_date,
+            start_time,
+            end_time,
+        )
         self.validate_schedule_exists(schedule_id)
         self.validate_employee_can_work(employee_id)
         self.validate_date_in_schedule_week(schedule_id, shift_date)
@@ -192,7 +229,7 @@ class ShiftsService:
             employee_id, shift_date, start_time, end_time
         )
         if overlapping_shifts:
-            raise OverlappingShiftError
+            raise OverlappingShiftError(overlapping_shifts)
 
         shift_data = {
             "schedule_id": str(schedule_id),
@@ -210,7 +247,9 @@ class ShiftsService:
         if not response.data:
             raise ShiftValidationError("Failed to create shift")
 
-        return response.data[0]
+        created = response.data[0]
+        logger.info("Shift created id=%s", created.get("id"))
+        return created
 
     def update_shift(
         self,
@@ -340,9 +379,13 @@ class ShiftsService:
             update_data["notes"] = notes
 
         if not update_data:
+            logger.info("No changes to shift id=%s", shift_id)
             return existing_shift
 
         update_data["updated_at"] = datetime.utcnow().isoformat()
+        logger.info(
+            "Updating shift id=%s fields=%s", shift_id, list(update_data.keys())
+        )
 
         response = (
             self.supabase.table(self.table_name)
@@ -351,6 +394,7 @@ class ShiftsService:
             .execute()
         )
 
+        logger.info("Shift updated id=%s", shift_id)
         return response.data[0]
 
     # === DELETE ===

@@ -1,3 +1,5 @@
+import logging
+
 from collections import defaultdict
 from datetime import date, time, timedelta, datetime
 from typing import List, Dict, Any, Optional
@@ -9,6 +11,8 @@ from .shifts_service import shifts_service
 from .schedule_service import ScheduleService
 
 from ..core.constants import BELLAGIOS_SHIFT_TEMPLATES
+
+logger = logging.getLogger(__name__)
 
 
 class ScheduleGenerator:
@@ -50,6 +54,9 @@ class ScheduleGenerator:
             restaurant_id: Restaurant ID
             week_start: Monday of the week to generate
         """
+        logger.info(
+            "Generating schedule: restaurant_id=%s week_start=%s", restaurant_id, week_start
+        )
 
         schedule = self.schedule_service.create_schedule(restaurant_id, week_start)
 
@@ -57,6 +64,8 @@ class ScheduleGenerator:
 
         if not employees:
             raise ValueError("No active employees found")
+
+        logger.info("Loaded %d active employees", len(employees))
 
         employees_by_role = defaultdict(list)
         for employee in employees:
@@ -73,7 +82,6 @@ class ScheduleGenerator:
             role = template["role"]
             count = template.get("count", 1)
 
-
             shift_date = week_start + timedelta(days=day_of_week - 1)
 
             if not (week_start <= shift_date < week_start + timedelta(days=7)):
@@ -81,7 +89,11 @@ class ScheduleGenerator:
             eligible_employees = employees_by_role.get(role, [])
 
             if not eligible_employees:
-                print(f"WARNING: No employees with role '{role}' available")
+                logger.warning(
+                    "No employees with role '%s' available for template on %s",
+                    role,
+                    shift_date,
+                )
                 continue
 
             for _ in range(count):
@@ -90,30 +102,39 @@ class ScheduleGenerator:
                 )
 
                 if not employee:
-                    print(f"WARNING: Not enough employees for role '{role}'")
+                    logger.warning(
+                        "Not enough employees for role '%s' on %s", role, shift_date
+                    )
                     break
 
+                logger.info(
+                    "Assigning %s: selected %s (current hours: %.1f)",
+                    role,
+                    employee.get("name"),
+                    employee_hours[employee["id"]],
+                )
+
                 shift_data = {
-                "id": str(uuid4()),  
-                "schedule_id": str(schedule['id']),
-                "employee_id": str(employee['id']),
-                "shift_date": shift_date.isoformat(),
-                "start_time": start_time.isoformat(),
-                "end_time": end_time.isoformat(),
-                "notes": f"{role}",
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
-            }
+                    "id": str(uuid4()),
+                    "schedule_id": str(schedule["id"]),
+                    "employee_id": str(employee["id"]),
+                    "shift_date": shift_date.isoformat(),
+                    "start_time": start_time.isoformat(),
+                    "end_time": end_time.isoformat(),
+                    "notes": f"{role}",
+                    "created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
 
                 created_shifts.append(shift_data)
 
                 duration = self.calculate_duration(start_time, end_time)
                 employee_hours[employee["id"]] += duration
-                    
+
         if created_shifts:
             self.supabase.table("shifts").insert(created_shifts).execute()
 
-
+        logger.info("Schedule generated: %d total shifts", len(created_shifts))
 
         return {
             "id": schedule["id"],

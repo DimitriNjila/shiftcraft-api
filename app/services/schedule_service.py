@@ -1,8 +1,12 @@
+import logging
+
 from datetime import date, timedelta, datetime
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from supabase import Client
 from ..core.db import supabase
+
+logger = logging.getLogger(__name__)
 
 
 class ScheduleAlreadyExistsError(Exception):
@@ -60,7 +64,12 @@ class ScheduleService:
             List of schedule dictionaries
 
         """
-
+        logger.debug(
+            "get_schedules called: restaurant_id=%s start_date=%s end_date=%s",
+            restaurant_id,
+            start_date,
+            end_date,
+        )
         query = self.supabase.table(self.table_name).select("*")
 
         if restaurant_id is not None:
@@ -75,6 +84,7 @@ class ScheduleService:
         query = query.order("week_start", desc=True)
 
         response = query.execute()
+        logger.info("Returning %d schedules", len(response.data))
         return response.data
 
     def get_schedule_by_id(self, schedule_id) -> Dict[str, Any]:
@@ -89,13 +99,17 @@ class ScheduleService:
             List of schedule dictionaries
 
         """
-
+        logger.debug("Looking up schedule id=%s", schedule_id)
         query = (
             self.supabase.table(self.table_name).select("*").eq("id", str(schedule_id))
         )
         response = query.execute()
 
-        return response.data[0] if response.data else None
+        if response.data:
+            logger.info("Schedule found id=%s", schedule_id)
+            return response.data[0]
+        logger.warning("Schedule not found id=%s", schedule_id)
+        return None
 
     def get_schedule_with_shifts(self, schedule_id) -> Dict[str, Any]:
         """
@@ -130,6 +144,10 @@ class ScheduleService:
         shifts = []
         total_hours = 0
 
+        schedule["shifts"] = []
+        schedule["total_shifts"] = 0
+        schedule["total_hours"] = 0.0
+
         for shift in shifts_response.data:
             start = datetime.strptime(shift["start_time"], "%H:%M:%S")
             end = datetime.strptime(shift["end_time"], "%H:%M:%S")
@@ -140,11 +158,16 @@ class ScheduleService:
 
             shifts.append(shift)
 
-            # Attach shifts to schedule
-            schedule["shifts"] = shifts
-            schedule["total_shifts"] = len(shifts)
-            schedule["total_hours"] = round(total_hours, 2)
+        schedule["shifts"] = shifts
+        schedule["total_shifts"] = len(shifts)
+        schedule["total_hours"] = round(total_hours, 2)
 
+        logger.info(
+            "Schedule %s loaded: %d shifts, %.1f total hours",
+            schedule_id,
+            schedule["total_shifts"],
+            schedule["total_hours"],
+        )
         return schedule
 
     @staticmethod
@@ -195,6 +218,12 @@ class ScheduleService:
         """
         normalized_week_start = self.get_week_start(week_start)
 
+        logger.info(
+            "Creating schedule restaurant_id=%s week_start=%s",
+            restaurant_id,
+            normalized_week_start,
+        )
+
         if self.get_schedule_by_week(normalized_week_start, restaurant_id):
             raise ScheduleAlreadyExistsError(normalized_week_start)
 
@@ -203,8 +232,9 @@ class ScheduleService:
             "restaurant_id": restaurant_id,
         }
         response = self.supabase.table(self.table_name).insert(schedule_data).execute()
-
-        return response.data[0]
+        created = response.data[0]
+        logger.info("Schedule created id=%s", created.get("id"))
+        return created
 
     def create_schedules_for_range(
         self, start_date: date, end_date: date, restaurant_id: UUID
@@ -222,21 +252,33 @@ class ScheduleService:
         Returns:
             List of created schedules
         """
+        logger.info(
+            "Creating schedules for range: %s to %s restaurant_id=%s",
+            start_date,
+            end_date,
+            restaurant_id,
+        )
         created_schedules = []
+        skipped = 0
 
         current_week_start = self.get_week_start(start_date)
         end_week_start = self.get_week_start(end_date)
 
         while current_week_start <= end_week_start:
             try:
-                schedule = self.create_schedule(current_week_start, restaurant_id)
+                schedule = self.create_schedule(restaurant_id, current_week_start)
                 created_schedules.append(schedule)
             except ScheduleAlreadyExistsError:
                 # Skip weeks that already have schedules
-                pass
+                skipped += 1
 
             current_week_start += timedelta(weeks=1)
 
+        logger.info(
+            "%d schedules created, %d skipped (already exist)",
+            len(created_schedules),
+            skipped,
+        )
         return created_schedules
 
     def delete_schedule(self, schedule_id: UUID) -> Dict[str, Any]:
@@ -257,13 +299,14 @@ class ScheduleService:
         if not existing:
             raise ScheduleNotFoundError(schedule_id)
 
+        logger.info("Deleting schedule id=%s", schedule_id)
         response = (
             self.supabase.table(self.table_name)
             .delete()
             .eq("id", str(schedule_id))
             .execute()
         )
-
+        logger.info("Schedule deleted id=%s", schedule_id)
         return response.data[0] if response.data else existing
 
 
