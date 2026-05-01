@@ -41,12 +41,14 @@ ShiftCraft API provides a robust backend for restaurant managers to efficiently 
 2. **Create virtual environment**
 ```bash
    python -m venv venv
-   source venv/bin/activate  
+   source venv/bin/activate
+   
 ```
 
 3. **Install dependencies**
 ```bash
    uv install
+.  uv sync
 ```
 
 4. **Set up environment variables**
