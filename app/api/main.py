@@ -1,8 +1,7 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .routes import employee_router, schedule_router, shift_router
 from app.core.config import settings
 
@@ -14,7 +13,7 @@ logging.basicConfig(
 
 
 app = FastAPI(
-    title="Restaurant Scheduler API",
+    title="Shiftcraft API",
     version="1.0.0",
     docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
     redoc_url="/redoc" if settings.ENVIRONMENT == "development" else None,

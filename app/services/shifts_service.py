@@ -400,8 +400,25 @@ class ShiftsService:
     # === DELETE ===
 
     def delete_shift(self, shift_id: UUID) -> Dict[str, Any]:
-        """Delete a shift."""
-        pass
+        """Delete a shift.
+
+        Args:
+            shift_id: UUID of the shift to delete
+
+        Returns:
+            Deleted shift dictionary
+
+        Raises:
+            ShiftNotFoundError: If the shift does not exist
+        """
+        existing = self.get_shift_by_id(shift_id)
+        if not existing:
+            raise ShiftNotFoundError(shift_id)
+
+        logger.info("Deleting shift id=%s", shift_id)
+        self.supabase.table(self.table_name).delete().eq("id", str(shift_id)).execute()
+        logger.info("Shift deleted id=%s", shift_id)
+        return existing
 
 
 shifts_service = ShiftsService(supabase)

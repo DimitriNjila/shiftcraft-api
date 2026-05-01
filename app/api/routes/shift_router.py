@@ -1,5 +1,4 @@
 from ...models.shifts_model import ShiftCreate, ShiftResponse, ShiftUpdate
-from datetime import date
 from ...services.shifts_service import (
     shifts_service,
     ShiftNotFoundError,
@@ -11,7 +10,7 @@ from fastapi import APIRouter, HTTPException, status
 from uuid import UUID
 
 shifts_router = APIRouter(
-    prefix="/shifts",
+    prefix="/api/v1/shifts",
     tags=["shifts"],
     responses={404: {"description": "Not found"}},
 )
@@ -76,3 +75,13 @@ def update_shift(shift_id: UUID, request: ShiftUpdate):
 
     except ShiftValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@shifts_router.delete("/{shift_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_shift(shift_id: UUID):
+    try:
+        shifts_service.delete_shift(shift_id)
+    except ShiftNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Shift {shift_id} not found"
+        )

@@ -58,7 +58,20 @@ class ScheduleGenerator:
             "Generating schedule: restaurant_id=%s week_start=%s", restaurant_id, week_start
         )
 
-        schedule = self.schedule_service.create_schedule(restaurant_id, week_start)
+        normalized_week_start = self.schedule_service.get_week_start(week_start)
+        existing_schedule = self.schedule_service.get_schedule_by_week(
+            normalized_week_start, str(restaurant_id)
+        )
+
+        if existing_schedule:
+            logger.info(
+                "Schedule already exists for week %s, appending shifts to id=%s",
+                normalized_week_start,
+                existing_schedule["id"],
+            )
+            schedule = existing_schedule
+        else:
+            schedule = self.schedule_service.create_schedule(restaurant_id, week_start)
 
         employees = self.employee_service.get_employees(restaurant_id, is_active=True)
 

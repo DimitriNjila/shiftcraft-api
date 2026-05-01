@@ -7,12 +7,11 @@ from ...models.schedule_model import (
 from datetime import date
 from ...services.schedule_service import schedule_service
 from ...services.schedule_generator_service import schedule_generator
-from ...core.constants import BELLAGIOS_SHIFT_TEMPLATES
 from fastapi import APIRouter, HTTPException, status
 from uuid import UUID
 
 schedule_router = APIRouter(
-    prefix="/schedules",
+    prefix="/api/v1/schedules",
     tags=["schedules"],
     responses={404: {"description": "Not found"}},
 )

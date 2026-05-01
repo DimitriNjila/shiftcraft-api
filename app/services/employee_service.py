@@ -84,6 +84,7 @@ class EmployeeService:
         role: str,
         is_active: bool = True,
         restaurant_id: str = None,
+        salary: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Create a new employee.
@@ -124,6 +125,9 @@ class EmployeeService:
             "restaurant_id": restaurant_id,
         }
 
+        if salary is not None:
+            employee_data["salary"] = salary
+
         response = self.supabase.table(self.table_name).insert(employee_data).execute()
         created = response.data[0]
         logger.info("Employee created id=%s", created.get("id"))
@@ -137,6 +141,7 @@ class EmployeeService:
         is_active: Optional[bool] = None,
         email: Optional[str] = None,
         deleted_at: Optional[str] = None,
+        salary: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Update an existing employee.
@@ -172,6 +177,8 @@ class EmployeeService:
             update_data["email"] = email
         if deleted_at is not None:
             update_data["deleted_at"] = deleted_at
+        if salary is not None:
+            update_data["salary"] = salary
 
         if not update_data:
             logger.warning("update_employee called with no fields to update id=%s", employee_id)

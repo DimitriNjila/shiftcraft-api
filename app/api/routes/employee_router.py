@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, status
 from uuid import UUID
 
 employee_router = APIRouter(
-    prefix="/employees",
+    prefix="/api/v1/employees",
     tags=["employees"],
     responses={404: {"description": "Not found"}},
 )
@@ -46,6 +46,7 @@ def create_employee(employee: EmployeeCreate):
             role=employee.role,
             is_active=employee.is_active,
             restaurant_id=employee.restaurant_id,
+            salary=employee.salary,
         )
         return new_employee
     except ValueError as e:
@@ -62,6 +63,7 @@ def update_employee(employee_id: UUID, employee: EmployeeUpdate):
             is_active=employee.is_active,
             email=employee.email,
             deleted_at=employee.deleted_at,
+            salary=employee.salary,
         )
         return updated_employee
     except EmployeeNotFoundError:

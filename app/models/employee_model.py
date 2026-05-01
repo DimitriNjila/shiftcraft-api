@@ -8,6 +8,7 @@ class EmployeeCreate(BaseModel):
     role: str
     restaurant_id: str
     is_active: bool = True
+    salary: Optional[float] = None
 
 
 class EmployeeModel(EmployeeCreate):
@@ -23,3 +24,4 @@ class EmployeeUpdate(BaseModel):
     is_active: Optional[bool] = None
     email: Optional[EmailStr] = None
     deleted_at: Optional[str] = None
+    salary: Optional[float] = None
