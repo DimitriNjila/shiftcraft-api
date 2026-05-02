@@ -6,12 +6,14 @@ from ...services.shifts_service import (
     OverlappingShiftError,
 )
 from ...services.employee_service import EmployeeNotFoundError
-from fastapi import APIRouter, HTTPException, status
+from ...core.auth import get_current_user
+from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
 
 shifts_router = APIRouter(
     prefix="/api/v1/shifts",
     tags=["shifts"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 

@@ -7,12 +7,14 @@ from ...models.schedule_model import (
 from datetime import date
 from ...services.schedule_service import schedule_service
 from ...services.schedule_generator_service import schedule_generator
-from fastapi import APIRouter, HTTPException, status
+from ...core.auth import get_current_user
+from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
 
 schedule_router = APIRouter(
     prefix="/api/v1/schedules",
     tags=["schedules"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 

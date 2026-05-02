@@ -12,6 +12,7 @@ dependencies = [
     "pydantic[email]>=2.12.5",
     "pytest>=9.0.2",
     "pytest-mock>=3.0.0",
+    "anthropic>=0.50.0",
     "supabase>=2.27.2",
     "uvicorn>=0.40.0",
 ]

@@ -1,11 +1,13 @@
 from ...models.employee_model import EmployeeCreate, EmployeeModel, EmployeeUpdate
 from ...services.employee_service import employee_service, EmployeeNotFoundError
-from fastapi import APIRouter, HTTPException, status
+from ...core.auth import get_current_user
+from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
 
 employee_router = APIRouter(
     prefix="/api/v1/employees",
     tags=["employees"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 
@@ -47,6 +49,7 @@ def create_employee(employee: EmployeeCreate):
             is_active=employee.is_active,
             restaurant_id=employee.restaurant_id,
             salary=employee.salary,
+            max_hours_per_week=employee.max_hours_per_week,
         )
         return new_employee
     except ValueError as e:
@@ -64,6 +67,7 @@ def update_employee(employee_id: UUID, employee: EmployeeUpdate):
             email=employee.email,
             deleted_at=employee.deleted_at,
             salary=employee.salary,
+            max_hours_per_week=employee.max_hours_per_week,
         )
         return updated_employee
     except EmployeeNotFoundError:

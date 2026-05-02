@@ -9,6 +9,7 @@ class EmployeeCreate(BaseModel):
     restaurant_id: str
     is_active: bool = True
     salary: Optional[float] = None
+    max_hours_per_week: Optional[float] = None
 
 
 class EmployeeModel(EmployeeCreate):
@@ -25,3 +26,4 @@ class EmployeeUpdate(BaseModel):
     email: Optional[EmailStr] = None
     deleted_at: Optional[str] = None
     salary: Optional[float] = None
+    max_hours_per_week: Optional[float] = None

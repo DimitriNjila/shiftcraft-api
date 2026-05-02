@@ -9,10 +9,13 @@ from ..core.db import supabase
 from .employee_service import EmployeeService
 from .shifts_service import shifts_service
 from .schedule_service import ScheduleService
+from .shift_template_service import ShiftTemplateService
 
 from ..core.constants import BELLAGIOS_SHIFT_TEMPLATES
 
 logger = logging.getLogger(__name__)
+
+MIN_REST_HOURS = 10.0
 
 
 class ScheduleGenerator:
@@ -22,6 +25,10 @@ class ScheduleGenerator:
     Optimized for:
     - Speed: Generates typical week in < 1 second
     - Fairness: Distributes hours evenly across employees while respecting availability and roles
+
+    Constraints enforced:
+    - Minimum rest between shifts: 10 hours
+    - Weekly hours cap: respects employee.max_hours_per_week when set
 
     shift_templates: List of shift patterns to create
                 Example: [
@@ -40,23 +47,46 @@ class ScheduleGenerator:
         self.schedule_service = ScheduleService(supabase_client)
         self.employee_service = EmployeeService(supabase_client)
         self.shift_service = shifts_service
+        self.shift_template_service = ShiftTemplateService(supabase_client)
 
     def generate_schedule(
         self,
         restaurant_id: UUID,
         week_start: date,
-        shift_templates: List[Dict[str, Any]] = BELLAGIOS_SHIFT_TEMPLATES,
+        shift_templates: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a schedule for a given restaurant and week.
 
+        Template resolution order:
+            1. Explicitly passed shift_templates argument
+            2. Saved templates in the database for this restaurant
+            3. Hardcoded BELLAGIOS_SHIFT_TEMPLATES constant (fallback)
+
         Args:
             restaurant_id: Restaurant ID
             week_start: Monday of the week to generate
+            shift_templates: Override templates (optional)
         """
         logger.info(
             "Generating schedule: restaurant_id=%s week_start=%s", restaurant_id, week_start
         )
+
+        if shift_templates is None:
+            saved = self.shift_template_service.get_templates(str(restaurant_id))
+            if saved:
+                shift_templates = saved["templates"]
+                logger.info(
+                    "Using %d saved shift templates for restaurant_id=%s",
+                    len(shift_templates),
+                    restaurant_id,
+                )
+            else:
+                shift_templates = BELLAGIOS_SHIFT_TEMPLATES
+                logger.info(
+                    "No saved templates found, using default BELLAGIOS templates (%d)",
+                    len(BELLAGIOS_SHIFT_TEMPLATES),
+                )
 
         normalized_week_start = self.schedule_service.get_week_start(week_start)
         existing_schedule = self.schedule_service.get_schedule_by_week(
@@ -84,7 +114,13 @@ class ScheduleGenerator:
         for employee in employees:
             employees_by_role[employee["role"]].append(employee)
 
-        employee_hours = {employee["id"]: 0 for employee in employees}
+        employee_hours: Dict[str, float] = {emp["id"]: 0.0 for emp in employees}
+        last_shift_end: Dict[str, Optional[datetime]] = {emp["id"]: None for emp in employees}
+
+        # When appending to an existing schedule, preload already-assigned hours and
+        # last shift end times so constraints apply across both old and new shifts.
+        if existing_schedule:
+            self._preload_existing_shifts(schedule["id"], employee_hours, last_shift_end)
 
         created_shifts = []
 
@@ -99,6 +135,7 @@ class ScheduleGenerator:
 
             if not (week_start <= shift_date < week_start + timedelta(days=7)):
                 continue
+
             eligible_employees = employees_by_role.get(role, [])
 
             if not eligible_employees:
@@ -109,16 +146,28 @@ class ScheduleGenerator:
                 )
                 continue
 
-            for _ in range(count):
-                employee = self.select_employee_with_least_hours(
-                    eligible_employees, employee_hours
-                )
+            shift_start_dt = datetime.combine(shift_date, start_time)
+            shift_end_dt = datetime.combine(shift_date, end_time)
+            duration = self.calculate_duration(start_time, end_time)
 
-                if not employee:
+            for _ in range(count):
+                available = [
+                    emp for emp in eligible_employees
+                    if self._has_sufficient_rest(last_shift_end[emp["id"]], shift_start_dt)
+                    and not self._would_exceed_hours_cap(
+                        emp, employee_hours[emp["id"]], duration
+                    )
+                ]
+
+                if not available:
                     logger.warning(
-                        "Not enough employees for role '%s' on %s", role, shift_date
+                        "No available employees for role '%s' on %s (rest/cap constraints)",
+                        role,
+                        shift_date,
                     )
                     break
+
+                employee = self.select_employee_with_least_hours(available, employee_hours)
 
                 logger.info(
                     "Assigning %s: selected %s (current hours: %.1f)",
@@ -141,8 +190,8 @@ class ScheduleGenerator:
 
                 created_shifts.append(shift_data)
 
-                duration = self.calculate_duration(start_time, end_time)
                 employee_hours[employee["id"]] += duration
+                last_shift_end[employee["id"]] = shift_end_dt
 
         if created_shifts:
             self.supabase.table("shifts").insert(created_shifts).execute()
@@ -156,6 +205,60 @@ class ScheduleGenerator:
             "total_shifts": len(created_shifts),
             "status": "Completed",
         }
+
+    def _preload_existing_shifts(
+        self,
+        schedule_id: str,
+        employee_hours: Dict[str, float],
+        last_shift_end: Dict[str, Optional[datetime]],
+    ) -> None:
+        """
+        Load existing shifts for a schedule into the tracking dicts so that
+        rest and hours-cap constraints apply correctly when appending new shifts.
+        """
+        response = (
+            self.supabase.table("shifts")
+            .select("*")
+            .eq("schedule_id", str(schedule_id))
+            .execute()
+        )
+        for shift in response.data:
+            emp_id = shift["employee_id"]
+            if emp_id not in employee_hours:
+                continue
+            start = self.parse_time(shift["start_time"])
+            end = self.parse_time(shift["end_time"])
+            duration = self.calculate_duration(start, end)
+            employee_hours[emp_id] = employee_hours.get(emp_id, 0.0) + duration
+
+            shift_end_dt = datetime.combine(
+                date.fromisoformat(shift["shift_date"]), end
+            )
+            current_last = last_shift_end.get(emp_id)
+            if current_last is None or shift_end_dt > current_last:
+                last_shift_end[emp_id] = shift_end_dt
+
+        logger.info("Preloaded existing shifts for schedule_id=%s", schedule_id)
+
+    @staticmethod
+    def _has_sufficient_rest(
+        last_end: Optional[datetime], next_start: datetime
+    ) -> bool:
+        """Return True if at least MIN_REST_HOURS have passed since the employee's last shift."""
+        if last_end is None:
+            return True
+        gap_hours = (next_start - last_end).total_seconds() / 3600
+        return gap_hours >= MIN_REST_HOURS
+
+    @staticmethod
+    def _would_exceed_hours_cap(
+        employee: Dict[str, Any], current_hours: float, additional_hours: float
+    ) -> bool:
+        """Return True if adding this shift would exceed the employee's weekly hours cap."""
+        cap = employee.get("max_hours_per_week")
+        if cap is None:
+            return False
+        return current_hours + additional_hours > cap
 
     @staticmethod
     def select_employee_with_least_hours(
@@ -185,141 +288,3 @@ class ScheduleGenerator:
 
 
 schedule_generator = ScheduleGenerator(supabase)
-
-# // example request:
-# curl -X 'POST' \
-#   'http://localhost:8000/schedules/generate' \
-#   -H 'accept: application/json' \
-#   -H 'Content-Type: application/json' \
-#   -d '{
-#   "week_start": "2026-04-20",
-#   "restaurant_id": "4fadbd49-40ab-4105-a670-f7906722beac",
-#   "shift_templates": [
-#     {
-#         "day_of_week": 2,
-#         "start_time": "16:00:00",
-#         "end_time": "20:00:00",
-#         "role": "Server",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 2,
-#         "start_time": "11:00:00",
-#         "end_time": "20:00:00",
-#         "role": "Cook",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 3,
-#         "start_time": "11:00:00",
-#         "end_time": "20:00:00",
-#         "role": "Server",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 3,
-#         "start_time": "11:00:00",
-#         "end_time": "16:00:00",
-#         "role": "Cook",
-#         "count": 2
-#     },
-#     {
-#         "day_of_week": 3,
-#         "start_time": "16:00:00",
-#         "end_time": "20:00:00",
-#         "role": "Cook",
-#         "count": 2
-#     },
-#     {
-#         "day_of_week": 4,
-#         "start_time": "11:00:00",
-#         "end_time": "16:00:00",
-#         "role": "Server",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 4,
-#         "start_time": "11:00:00",
-#         "end_time": "16:00:00",
-#         "role": "Cook",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 4,
-#         "start_time": "16:00:00",
-#         "end_time": "20:00:00",
-#         "role": "Cook",
-#         "count": 2
-#     },
-#     {
-#         "day_of_week": 5,
-#         "start_time": "11:00:00",
-#         "end_time": "16:00:00",
-#         "role": "Server",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 5,
-#         "start_time": "16:00:00",
-#         "end_time": "21:00:00",
-#         "role": "Server",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 5,
-#         "start_time": "11:00:00",
-#         "end_time": "16:00:00",
-#         "role": "Cook",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 5,
-#         "start_time": "16:00:00",
-#         "end_time": "21:00:00",
-#         "role": "Cook",
-#         "count": 2
-#     },
-#     {
-#         "day_of_week": 6,
-#         "start_time": "11:00:00",
-#         "end_time": "16:00:00",
-#         "role": "Server",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 6,
-#         "start_time": "11:00:00",
-#         "end_time": "16:00:00",
-#         "role": "Cook",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 6,
-#         "start_time": "16:00:00",
-#         "end_time": "21:00:00",
-#         "role": "Server",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 6,
-#         "start_time": "16:00:00",
-#         "end_time": "21:00:00",
-#         "role": "Cook",
-#         "count": 2
-#     },
-#     {
-#         "day_of_week": 7,
-#         "start_time": "12:00:00",
-#         "end_time": "18:00:00",
-#         "role": "Server",
-#         "count": 1
-#     },
-#     {
-#         "day_of_week": 7,
-#         "start_time": "12:00:00",
-#         "end_time": "18:00:00",
-#         "role": "Cook",
-#         "count": 1
-#     }
-#   ]
-# }'

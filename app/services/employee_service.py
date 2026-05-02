@@ -85,6 +85,7 @@ class EmployeeService:
         is_active: bool = True,
         restaurant_id: str = None,
         salary: Optional[float] = None,
+        max_hours_per_week: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Create a new employee.
@@ -127,6 +128,8 @@ class EmployeeService:
 
         if salary is not None:
             employee_data["salary"] = salary
+        if max_hours_per_week is not None:
+            employee_data["max_hours_per_week"] = max_hours_per_week
 
         response = self.supabase.table(self.table_name).insert(employee_data).execute()
         created = response.data[0]
@@ -142,6 +145,7 @@ class EmployeeService:
         email: Optional[str] = None,
         deleted_at: Optional[str] = None,
         salary: Optional[float] = None,
+        max_hours_per_week: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Update an existing employee.
@@ -179,6 +183,8 @@ class EmployeeService:
             update_data["deleted_at"] = deleted_at
         if salary is not None:
             update_data["salary"] = salary
+        if max_hours_per_week is not None:
+            update_data["max_hours_per_week"] = max_hours_per_week
 
         if not update_data:
             logger.warning("update_employee called with no fields to update id=%s", employee_id)

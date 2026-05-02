@@ -13,13 +13,14 @@ EMPLOYEE_ID_2 = "11111111-1111-1111-1111-222222222222"
 SCHEDULE_ID = "22222222-2222-2222-2222-222222222222"
 SHIFT_ID = "33333333-3333-3333-3333-333333333333"
 RESTAURANT_ID = "44444444-4444-4444-4444-444444444444"
+TEMPLATE_ID = "55555555-5555-5555-5555-555555555555"
 
 
 def make_supabase_chain(return_data=None):
     """Build a chainable Supabase mock where every method returns itself and
     .execute() returns a MagicMock with the given data list."""
     chain = MagicMock()
-    for method in ("table", "select", "insert", "update", "delete", "eq", "neq", "gte", "lte", "order"):
+    for method in ("table", "select", "insert", "update", "upsert", "delete", "eq", "neq", "gte", "lte", "order"):
         getattr(chain, method).return_value = chain
     chain.execute.return_value = MagicMock(data=return_data if return_data is not None else [])
     return chain
@@ -74,6 +75,19 @@ def sample_shift():
         "end_time": "17:00:00",
         "notes": None,
         "created_at": "2026-01-01T00:00:00",
+        "updated_at": "2026-01-01T00:00:00",
+    }
+
+
+@pytest.fixture
+def sample_shift_templates():
+    return {
+        "id": TEMPLATE_ID,
+        "restaurant_id": RESTAURANT_ID,
+        "templates": [
+            {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+            {"day_of_week": 3, "start_time": "11:00:00", "end_time": "20:00:00", "role": "Cook", "count": 1},
+        ],
         "updated_at": "2026-01-01T00:00:00",
     }
 

@@ -2,7 +2,8 @@ import logging
 
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import employee_router, schedule_router, shift_router
+from .routes import employee_router, schedule_router, shift_router, shift_template_router
+from .routes.ai_router import ai_router
 from app.core.config import settings
 
 logging.basicConfig(
@@ -35,6 +36,8 @@ app.add_middleware(
 app.include_router(employee_router.employee_router)
 app.include_router(schedule_router.schedule_router)
 app.include_router(shift_router.shifts_router)
+app.include_router(shift_template_router.shift_template_router)
+app.include_router(ai_router)
 
 
 @app.get("/")
