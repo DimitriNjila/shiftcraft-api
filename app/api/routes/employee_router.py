@@ -1,8 +1,12 @@
+import logging
+
 from ...models.employee_model import EmployeeCreate, EmployeeModel, EmployeeUpdate
 from ...services.employee_service import employee_service, EmployeeNotFoundError
 from ...core.auth import get_current_user
 from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 employee_router = APIRouter(
     prefix="/api/v1/employees",
@@ -23,6 +27,7 @@ def get_employees(
         )
         return employees
     except Exception as e:
+        logger.exception("GET /employees failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -53,10 +58,11 @@ def create_employee(employee: EmployeeCreate):
         )
         return new_employee
     except ValueError as e:
+        logger.warning("Create employee failed validation: %s", e)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@employee_router.put("/{employee_id}", response_model=EmployeeModel)
+@employee_router.patch("/{employee_id}", response_model=EmployeeModel)
 def update_employee(employee_id: UUID, employee: EmployeeUpdate):
     try:
         updated_employee = employee_service.update_employee(
@@ -71,11 +77,13 @@ def update_employee(employee_id: UUID, employee: EmployeeUpdate):
         )
         return updated_employee
     except EmployeeNotFoundError:
+        logger.warning("Update employee failed: employee %s not found", employee_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Employee with ID {employee_id} not found",
         )
     except ValueError as e:
+        logger.warning("Update employee %s failed validation: %s", employee_id, e)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
@@ -84,6 +92,7 @@ def delete_employee(employee_id: UUID):
     try:
         employee_service.deactivate_employee(employee_id)
     except EmployeeNotFoundError:
+        logger.warning("Delete employee failed: employee %s not found", employee_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Employee with ID {employee_id} not found",

@@ -60,4 +60,4 @@ class GenerateScheduleRequest(BaseModel):
 
     week_start: date = Field(..., description="Monday of the week to schedule")
     restaurant_id: str
-    shift_templates: List[ShiftTemplate]
+    shift_templates: Optional[List[ShiftTemplate]] = None

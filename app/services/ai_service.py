@@ -38,7 +38,9 @@ class AIService:
             )
         self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-    def analyze_schedule(self, schedule: Dict[str, Any], shifts: List[Dict[str, Any]]) -> str:
+    def analyze_schedule(
+        self, schedule: Dict[str, Any], shifts: List[Dict[str, Any]]
+    ) -> str:
         """
         Analyse a weekly schedule and return a plain-text report.
 
@@ -93,6 +95,7 @@ class AIService:
             end_str = shift.get("end_time", "00:00:00")
             try:
                 from datetime import datetime
+
                 fmt = "%H:%M:%S"
                 start_dt = datetime.strptime(start_str, fmt)
                 end_dt = datetime.strptime(end_str, fmt)
@@ -101,28 +104,41 @@ class AIService:
                 hours = 0.0
 
             if emp_id not in employee_hours:
-                employee_hours[emp_id] = {"name": name, "role": role, "total_hours": 0.0, "shifts": 0}
+                employee_hours[emp_id] = {
+                    "name": name,
+                    "role": role,
+                    "total_hours": 0.0,
+                    "shifts": 0,
+                }
             employee_hours[emp_id]["total_hours"] += hours
             employee_hours[emp_id]["shifts"] += 1
 
         # Build shift lines grouped by date
         shifts_by_date: Dict[str, List[str]] = {}
-        for shift in sorted(shifts, key=lambda s: (s.get("shift_date", ""), s.get("start_time", ""))):
+        for shift in sorted(
+            shifts, key=lambda s: (s.get("shift_date", ""), s.get("start_time", ""))
+        ):
             d = shift.get("shift_date", "unknown")
             name = shift.get("employee_name") or shift.get("employee_id", "unknown")
             role = shift.get("role") or shift.get("notes") or "Unknown"
             line = f"  - {name} ({role}): {shift.get('start_time', '?')} – {shift.get('end_time', '?')}"
             shifts_by_date.setdefault(d, []).append(line)
 
-        employee_summary = "\n".join(
-            f"  - {v['name']} ({v['role']}): {v['total_hours']:.1f} hours across {v['shifts']} shift(s)"
-            for v in employee_hours.values()
-        ) or "  (no employees)"
+        employee_summary = (
+            "\n".join(
+                f"  - {v['name']} ({v['role']}): {v['total_hours']:.1f} hours across {v['shifts']} shift(s)"
+                for v in employee_hours.values()
+            )
+            or "  (no employees)"
+        )
 
-        shifts_summary = "\n".join(
-            f"\n{day}:\n" + "\n".join(lines)
-            for day, lines in shifts_by_date.items()
-        ) or "  (no shifts)"
+        shifts_summary = (
+            "\n".join(
+                f"\n{day}:\n" + "\n".join(lines)
+                for day, lines in shifts_by_date.items()
+            )
+            or "  (no shifts)"
+        )
 
         return (
             f"Week starting {week_start}\n\n"
