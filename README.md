@@ -1,4 +1,4 @@
-# ShiftCraft API
+# ShiftCraft API dev branch
 
 > A modern restaurant scheduling backend built with FastAPI, Supabase, and Python.
 
