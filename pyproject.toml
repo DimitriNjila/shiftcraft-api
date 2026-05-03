@@ -16,3 +16,5 @@ dependencies = [
     "supabase>=2.27.2",
     "uvicorn>=0.40.0",
 ]
+[project.scripts]
+app = "app.api.main:app"
