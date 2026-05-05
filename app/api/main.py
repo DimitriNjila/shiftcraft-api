@@ -29,8 +29,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",  # Local development
-        "https://restaurant-scheduler.vercel.app",  # Production frontend
-        "https://*.vercel.app",  # Vercel preview deployments
+        "https://shiftcraft-gamma.vercel.app",  # Production frontend
     ],
     allow_credentials=True,
     allow_methods=["*"],
