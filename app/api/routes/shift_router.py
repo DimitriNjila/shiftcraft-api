@@ -22,7 +22,7 @@ shifts_router = APIRouter(
 )
 
 
-@shifts_router.post("/", response_model=ShiftCreate)
+@shifts_router.post("", response_model=ShiftCreate)
 def create_shift(shift: ShiftCreate):
     try:
         created_shift = shifts_service.create_shift(

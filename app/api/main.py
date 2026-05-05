@@ -22,12 +22,8 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
     redoc_url="/redoc" if settings.ENVIRONMENT == "development" else None,
+    redirect_slashes=True,
 )
-
-# adding global options handler
-@app.options("/{full_path:path}")
-async def preflight_handler():
-    return {}
 
 # CORS - Allow frontend domain
 app.add_middleware(

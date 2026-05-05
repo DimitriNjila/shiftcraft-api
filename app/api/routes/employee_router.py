@@ -16,7 +16,7 @@ employee_router = APIRouter(
 )
 
 
-@employee_router.get("/", response_model=list[EmployeeModel])
+@employee_router.get("", response_model=list[EmployeeModel])
 def get_employees(
     restaurant_id: str | None = None,
     is_active: bool | None = None,
@@ -44,7 +44,7 @@ def get_employee(employee_id: UUID):
 
 
 @employee_router.post(
-    "/", response_model=EmployeeModel, status_code=status.HTTP_201_CREATED
+    "", response_model=EmployeeModel, status_code=status.HTTP_201_CREATED
 )
 def create_employee(employee: EmployeeCreate):
     try:

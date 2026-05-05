@@ -11,7 +11,7 @@ shift_template_router = APIRouter(
 )
 
 
-@shift_template_router.get("/", response_model=ShiftTemplateResponse)
+@shift_template_router.get("", response_model=ShiftTemplateResponse)
 def get_shift_templates(restaurant_id: str):
     """Get the saved shift templates for a restaurant."""
     result = shift_template_service.get_templates(restaurant_id)
@@ -23,7 +23,7 @@ def get_shift_templates(restaurant_id: str):
     return result
 
 
-@shift_template_router.put("/", response_model=ShiftTemplateResponse)
+@shift_template_router.put("", response_model=ShiftTemplateResponse)
 def save_shift_templates(body: ShiftTemplateSave):
     """Save or overwrite the shift templates for a restaurant."""
     try:
