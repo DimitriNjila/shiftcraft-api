@@ -24,6 +24,11 @@ app = FastAPI(
     redoc_url="/redoc" if settings.ENVIRONMENT == "development" else None,
 )
 
+# adding global options handler
+@app.options("/{full_path:path}")
+async def preflight_handler():
+    return {}
+
 # CORS - Allow frontend domain
 app.add_middleware(
     CORSMiddleware,
