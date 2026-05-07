@@ -11,12 +11,15 @@ logger = logging.getLogger(__name__)
 
 class ScheduleAlreadyExistsError(Exception):
     """
-    Raised when a schedule already exists for the given week
+    Raised when a schedule already exists for the given week at a given restaurant
     """
 
-    def __init__(self, week_start: date):
+    def __init__(self, week_start: date, restaurant_id: str):
         self.week_start = week_start
-        super().__init__(f"Schedule already exists for week starting {week_start}")
+        self.restaurant_id = restaurant_id
+        super().__init__(
+            f"Schedule already exists for week starting {week_start} at restaurant {restaurant_id}"
+        )
 
 
 class ScheduleNotFoundError(Exception):
@@ -24,9 +27,12 @@ class ScheduleNotFoundError(Exception):
     Raised when a schedule is not found
     """
 
-    def __init__(self, week_start: date):
+    def __init__(self, week_start: date, restaurant_id: str):
         self.week_start = week_start
-        super().__init__(f"Schedule not found for week starting {week_start}")
+        self.restaurant_id = restaurant_id
+        super().__init__(
+            f"Schedule not found for week starting {week_start} at restaurant {restaurant_id}"
+        )
 
 
 class ScheduleService:
@@ -92,7 +98,7 @@ class ScheduleService:
         Get a specific schedule based on id
 
         Args:
-            schedule_id: Retrieve specific n.
+            schedule_id: Retrieve specific schedule
 
 
         Returns:

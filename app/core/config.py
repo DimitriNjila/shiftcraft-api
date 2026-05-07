@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     # AI
     ANTHROPIC_API_KEY: Optional[str] = None
 
+    # Observability
+    SENTRY_DSN: Optional[str] = None
+
     model_config = {"env_file": ".env", "case_sensitive": True}
 
 
