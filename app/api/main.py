@@ -104,6 +104,17 @@ app.include_router(shift_template_router.shift_template_router)
 app.include_router(ai_router)
 
 
+@app.on_event("startup")
+async def startup_event():
+    """
+    Warm up the Supabase client on startup so the first real request isn't
+    slower due to cold-start connection overhead.
+    """
+    from app.core.db import get_supabase
+    get_supabase()
+    logger.info("Supabase client initialised")
+
+
 @app.get("/")
 async def read_root():
     return {"Hello": "World"}

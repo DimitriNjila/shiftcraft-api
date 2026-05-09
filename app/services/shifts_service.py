@@ -1,6 +1,6 @@
 import logging
 
-from ..core.db import supabase
+from ..core.db import get_supabase
 from supabase import Client
 from typing import List, Optional, Dict, Any
 from .schedule_service import schedule_service, ScheduleNotFoundError
@@ -41,9 +41,15 @@ class OverlappingShiftError(ShiftValidationError):
 class ShiftsService:
     """Service to manage the employee shifts"""
 
-    def __init__(self, supabase_client: Client):
-        self.supabase = supabase_client
+    def __init__(self, supabase_client: Optional[Client] = None):
+        self._supabase = supabase_client
         self.table_name = "shifts"
+
+    @property
+    def supabase(self) -> Client:
+        if self._supabase is None:
+            self._supabase = get_supabase()
+        return self._supabase
 
     def validate_schedule_exists(self, schedule_id: UUID):
         """Ensure schedule exists before adding shifts to it."""
@@ -421,4 +427,4 @@ class ShiftsService:
         return existing
 
 
-shifts_service = ShiftsService(supabase)
+shifts_service = ShiftsService()

@@ -4,7 +4,7 @@ import sentry_sdk
 from fastapi import HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing import Optional
-from .db import supabase
+from .db import get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def get_current_user(
     token = credentials.credentials
 
     try:
-        response = supabase.auth.get_user(token)
+        response = get_supabase().auth.get_user(token)
 
         if not response.user:
             raise HTTPException(
