@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: str
 
     # CORS origins
-    CORS_ORIGINS: str = "http://localhost:5173"
+    CORS_ORIGINS: str
 
     @property
     def cors_origins_list(self) -> List[str]:
