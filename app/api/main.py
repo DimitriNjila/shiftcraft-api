@@ -9,7 +9,12 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
 
 from .middleware import RequestLoggingMiddleware, configure_json_logging
-from .routes import employee_router, schedule_router, shift_router, shift_template_router
+from .routes import (
+    employee_router,
+    schedule_router,
+    shift_router,
+    shift_template_router,
+)
 from .routes.ai_router import ai_router
 from app.core.config import settings
 
@@ -49,7 +54,7 @@ app = FastAPI(
 # before any auth/logging work happens.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[allow_origins=settings.cors_origins_list],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,6 +62,7 @@ app.add_middleware(
 app.add_middleware(RequestLoggingMiddleware)
 
 # ── Exception handlers ────────────────────────────────────────────────────────
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -108,6 +114,7 @@ async def startup_event():
     slower due to cold-start connection overhead.
     """
     from app.core.db import get_supabase
+
     get_supabase()
     logger.info("Supabase client initialised")
 
