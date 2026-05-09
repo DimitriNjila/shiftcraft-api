@@ -15,6 +15,7 @@ dependencies = [
     "anthropic>=0.50.0",
     "supabase>=2.27.2",
     "uvicorn>=0.40.0",
+    "sentry-sdk[fastapi]>=2.59.0",
 ]
 [project.scripts]
 app = "app.api.main:app"

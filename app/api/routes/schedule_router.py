@@ -23,7 +23,7 @@ schedule_router = APIRouter(
 )
 
 
-@schedule_router.get("/", response_model=list[ScheduleModel])
+@schedule_router.get("", response_model=list[ScheduleModel])
 def get_schedules(
     restaurant_id: UUID | None = None,
     start_date: date | None = None,
@@ -50,7 +50,7 @@ def get_schedule(schedule_id: UUID):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@schedule_router.post("/", response_model=ScheduleModel)
+@schedule_router.post("", response_model=ScheduleModel)
 def create_schedule(schedule: ScheduleCreate):
     try:
         schedule = schedule_service.create_schedule(

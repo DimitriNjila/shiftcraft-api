@@ -5,7 +5,7 @@ from datetime import date, time, timedelta, datetime
 from typing import List, Dict, Any, Optional
 from uuid import UUID, uuid4
 from supabase import Client
-from ..core.db import supabase
+from ..core.db import get_supabase
 from .employee_service import EmployeeService
 from .shifts_service import shifts_service
 from .schedule_service import ScheduleService
@@ -42,12 +42,48 @@ class ScheduleGenerator:
                 ]
     """
 
-    def __init__(self, supabase_client: Client):
-        self.supabase = supabase_client
-        self.schedule_service = ScheduleService(supabase_client)
-        self.employee_service = EmployeeService(supabase_client)
+    def __init__(self, supabase_client: Optional[Client] = None):
+        self._supabase = supabase_client
+        self._schedule_service: Optional[ScheduleService] = None
+        self._employee_service: Optional[EmployeeService] = None
+        self._shift_template_service: Optional[ShiftTemplateService] = None
         self.shift_service = shifts_service
-        self.shift_template_service = ShiftTemplateService(supabase_client)
+
+    @property
+    def supabase(self) -> Client:
+        if self._supabase is None:
+            self._supabase = get_supabase()
+        return self._supabase
+
+    @property
+    def schedule_service(self) -> ScheduleService:
+        if self._schedule_service is None:
+            self._schedule_service = ScheduleService(self.supabase)
+        return self._schedule_service
+
+    @schedule_service.setter
+    def schedule_service(self, value: ScheduleService) -> None:
+        self._schedule_service = value
+
+    @property
+    def employee_service(self) -> EmployeeService:
+        if self._employee_service is None:
+            self._employee_service = EmployeeService(self.supabase)
+        return self._employee_service
+
+    @employee_service.setter
+    def employee_service(self, value: EmployeeService) -> None:
+        self._employee_service = value
+
+    @property
+    def shift_template_service(self) -> ShiftTemplateService:
+        if self._shift_template_service is None:
+            self._shift_template_service = ShiftTemplateService(self.supabase)
+        return self._shift_template_service
+
+    @shift_template_service.setter
+    def shift_template_service(self, value: ShiftTemplateService) -> None:
+        self._shift_template_service = value
 
     def generate_schedule(
         self,
@@ -287,4 +323,4 @@ class ScheduleGenerator:
         return (end_dt - start_dt).total_seconds() / 3600
 
 
-schedule_generator = ScheduleGenerator(supabase)
+schedule_generator = ScheduleGenerator()

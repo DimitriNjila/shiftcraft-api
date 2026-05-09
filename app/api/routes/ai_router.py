@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ...core.auth import get_current_user
-from ...core.db import supabase
+from ...core.db import get_supabase
 from ...services.ai_service import AIService, AIServiceUnavailableError
 from ...services.schedule_service import ScheduleService, ScheduleNotFoundError
 
@@ -35,7 +35,7 @@ def analyze_schedule(schedule_id: UUID):
     Returns a plain-text report covering fairness, coverage, workload,
     patterns, and concrete recommendations.
     """
-    schedule_service = ScheduleService(supabase)
+    schedule_service = ScheduleService(get_supabase())
 
     try:
         schedule_with_shifts = schedule_service.get_schedule_with_shifts(schedule_id)

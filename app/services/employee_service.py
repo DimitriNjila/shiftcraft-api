@@ -1,6 +1,6 @@
 import logging
 
-from ..core.db import supabase
+from ..core.db import get_supabase
 from uuid import UUID
 from supabase import Client
 from typing import List, Optional, Dict, Any
@@ -21,9 +21,15 @@ class EmployeeNotFoundError(Exception):
 class EmployeeService:
     """Service for managing restaurant employees"""
 
-    def __init__(self, supabase_client: Client):
-        self.supabase = supabase_client
+    def __init__(self, supabase_client: Optional[Client] = None):
+        self._supabase = supabase_client
         self.table_name = "employees"
+
+    @property
+    def supabase(self) -> Client:
+        if self._supabase is None:
+            self._supabase = get_supabase()
+        return self._supabase
 
     def get_employees(
         self, restaurant_id: Optional[str] = None, is_active: Optional[bool] = None
@@ -258,4 +264,4 @@ class EmployeeService:
         return result
 
 
-employee_service = EmployeeService(supabase_client=supabase)
+employee_service = EmployeeService()

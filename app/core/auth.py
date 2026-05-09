@@ -1,9 +1,10 @@
 import logging
 
+import sentry_sdk
 from fastapi import HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing import Optional
-from .db import supabase
+from .db import get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ def get_current_user(
     token = credentials.credentials
 
     try:
-        response = supabase.auth.get_user(token)
+        response = get_supabase().auth.get_user(token)
 
         if not response.user:
             raise HTTPException(
@@ -42,7 +43,11 @@ def get_current_user(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        return response.user
+        user = response.user
+        # Set Sentry user context so every error on this request is linked to
+        # the authenticated user — no PII beyond the opaque user ID.
+        sentry_sdk.set_user({"id": user.id})
+        return user
 
     except HTTPException:
         raise

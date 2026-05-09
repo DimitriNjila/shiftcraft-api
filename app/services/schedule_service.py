@@ -4,19 +4,23 @@ from datetime import date, timedelta, datetime
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from supabase import Client
-from ..core.db import supabase
+from ..core.db import get_supabase
 
 logger = logging.getLogger(__name__)
 
 
 class ScheduleAlreadyExistsError(Exception):
     """
-    Raised when a schedule already exists for the given week
+    Raised when a schedule already exists for the given week at a given restaurant
     """
 
-    def __init__(self, week_start: date):
+    def __init__(self, week_start: date, restaurant_id: str = None):
         self.week_start = week_start
-        super().__init__(f"Schedule already exists for week starting {week_start}")
+        self.restaurant_id = restaurant_id
+        msg = f"Schedule already exists for week starting {week_start}"
+        if restaurant_id:
+            msg += f" at restaurant {restaurant_id}"
+        super().__init__(msg)
 
 
 class ScheduleNotFoundError(Exception):
@@ -24,17 +28,28 @@ class ScheduleNotFoundError(Exception):
     Raised when a schedule is not found
     """
 
-    def __init__(self, week_start: date):
-        self.week_start = week_start
-        super().__init__(f"Schedule not found for week starting {week_start}")
+    def __init__(self, week_start_or_id, restaurant_id: str = None):
+        self.week_start = week_start_or_id
+        self.restaurant_id = restaurant_id
+        if restaurant_id:
+            msg = f"Schedule not found for week starting {week_start_or_id} at restaurant {restaurant_id}"
+        else:
+            msg = f"Schedule {week_start_or_id} not found"
+        super().__init__(msg)
 
 
 class ScheduleService:
     """Service for managing weekly Schedules"""
 
-    def __init__(self, supabase_client: Client):
-        self.supabase = supabase_client
+    def __init__(self, supabase_client: Optional[Client] = None):
+        self._supabase = supabase_client
         self.table_name = "schedules"
+
+    @property
+    def supabase(self) -> Client:
+        if self._supabase is None:
+            self._supabase = get_supabase()
+        return self._supabase
 
     @staticmethod
     def get_week_start(input_date: date) -> date:
@@ -92,7 +107,7 @@ class ScheduleService:
         Get a specific schedule based on id
 
         Args:
-            schedule_id: Retrieve specific n.
+            schedule_id: Retrieve specific schedule
 
 
         Returns:
@@ -225,7 +240,7 @@ class ScheduleService:
         )
 
         if self.get_schedule_by_week(normalized_week_start, restaurant_id):
-            raise ScheduleAlreadyExistsError(normalized_week_start)
+            raise ScheduleAlreadyExistsError(normalized_week_start, str(restaurant_id))
 
         schedule_data = {
             "week_start": normalized_week_start.isoformat(),
@@ -310,4 +325,4 @@ class ScheduleService:
         return response.data[0] if response.data else existing
 
 
-schedule_service = ScheduleService(supabase)
+schedule_service = ScheduleService()

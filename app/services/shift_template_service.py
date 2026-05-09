@@ -2,7 +2,7 @@ import logging
 
 from typing import Optional, List, Dict, Any
 from supabase import Client
-from ..core.db import supabase
+from ..core.db import get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +18,15 @@ class ShiftTemplateNotFoundError(Exception):
 class ShiftTemplateService:
     """Service for managing per-restaurant shift templates."""
 
-    def __init__(self, supabase_client: Client):
-        self.supabase = supabase_client
+    def __init__(self, supabase_client: Optional[Client] = None):
+        self._supabase = supabase_client
         self.table_name = "shift_templates"
+
+    @property
+    def supabase(self) -> Client:
+        if self._supabase is None:
+            self._supabase = get_supabase()
+        return self._supabase
 
     def get_templates(self, restaurant_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -92,4 +98,4 @@ class ShiftTemplateService:
         return result
 
 
-shift_template_service = ShiftTemplateService(supabase)
+shift_template_service = ShiftTemplateService()
