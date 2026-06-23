@@ -1,7 +1,13 @@
 import logging
 
 from ...models.employee_model import EmployeeCreate, EmployeeModel, EmployeeUpdate
+from ...models.availability_model import AvailabilityCreate, AvailabilityModel
 from ...services.employee_service import employee_service, EmployeeNotFoundError
+from ...services.availability_service import (
+    availability_service,
+    AvailabilityConflictError,
+    AvailabilityNotFoundError,
+)
 from ...core.auth import get_current_user
 from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
@@ -96,4 +102,62 @@ def delete_employee(employee_id: UUID):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Employee with ID {employee_id} not found",
+        )
+
+
+# --- Availability ---
+
+
+@employee_router.get(
+    "/{employee_id}/availability",
+    response_model=list[AvailabilityModel],
+)
+def get_employee_availability(employee_id: UUID):
+    """List all availability windows for an employee."""
+    employee = employee_service.get_employee_by_id(employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Employee with ID {employee_id} not found",
+        )
+    return availability_service.get_availability(employee_id)
+
+
+@employee_router.post(
+    "/{employee_id}/availability",
+    response_model=AvailabilityModel,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_employee_availability(employee_id: UUID, body: AvailabilityCreate):
+    """Add an availability window for an employee."""
+    try:
+        return availability_service.add_availability(
+            employee_id=employee_id,
+            day_of_week=body.day_of_week,
+            start_time=body.start_time,
+            end_time=body.end_time,
+        )
+    except EmployeeNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Employee with ID {employee_id} not found",
+        )
+    except AvailabilityConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@employee_router.delete(
+    "/{employee_id}/availability/{availability_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_employee_availability(employee_id: UUID, availability_id: UUID):
+    """Remove an availability window."""
+    try:
+        availability_service.delete_availability(employee_id, availability_id)
+    except AvailabilityNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Availability window {availability_id} not found",
         )

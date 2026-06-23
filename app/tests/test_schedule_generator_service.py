@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from datetime import date, time
 from uuid import UUID
 
@@ -276,3 +276,235 @@ def test_generate_schedule_respects_hours_cap(sample_schedule, sample_employee):
 
     # First shift assigned, second skipped due to cap
     assert result["total_shifts"] == 1
+
+
+# === _is_available ===
+
+def test_is_available_no_entry_in_map():
+    """Employee absent from map → no availability set → always available."""
+    result = ScheduleGenerator._is_available(
+        EMPLOYEE_ID, 2, time(9, 0), time(17, 0), availability_map={}
+    )
+    assert result is True
+
+
+def test_is_available_no_entry_for_day():
+    """Employee has availability set, but not for this day → unavailable."""
+    availability_map = {EMPLOYEE_ID: {3: [(time(9, 0), time(17, 0))]}}  # only Wednesday
+    result = ScheduleGenerator._is_available(
+        EMPLOYEE_ID, 2, time(9, 0), time(17, 0), availability_map  # asking about Tuesday
+    )
+    assert result is False
+
+
+def test_is_available_window_fully_covers_shift():
+    availability_map = {EMPLOYEE_ID: {2: [(time(9, 0), time(17, 0))]}}
+    result = ScheduleGenerator._is_available(
+        EMPLOYEE_ID, 2, time(9, 0), time(17, 0), availability_map
+    )
+    assert result is True
+
+
+def test_is_available_window_wider_than_shift():
+    """Window wider than the shift still counts as covering it."""
+    availability_map = {EMPLOYEE_ID: {2: [(time(8, 0), time(18, 0))]}}
+    result = ScheduleGenerator._is_available(
+        EMPLOYEE_ID, 2, time(9, 0), time(17, 0), availability_map
+    )
+    assert result is True
+
+
+def test_is_available_window_starts_too_late():
+    availability_map = {EMPLOYEE_ID: {2: [(time(10, 0), time(17, 0))]}}
+    result = ScheduleGenerator._is_available(
+        EMPLOYEE_ID, 2, time(9, 0), time(17, 0), availability_map
+    )
+    assert result is False
+
+
+def test_is_available_window_ends_too_early():
+    availability_map = {EMPLOYEE_ID: {2: [(time(9, 0), time(15, 0))]}}
+    result = ScheduleGenerator._is_available(
+        EMPLOYEE_ID, 2, time(9, 0), time(17, 0), availability_map
+    )
+    assert result is False
+
+
+def test_is_available_multiple_windows_one_covers():
+    """If any window fully covers the shift, the employee is available."""
+    availability_map = {
+        EMPLOYEE_ID: {
+            2: [
+                (time(9, 0), time(12, 0)),   # too short
+                (time(9, 0), time(17, 0)),   # exact match
+            ]
+        }
+    }
+    result = ScheduleGenerator._is_available(
+        EMPLOYEE_ID, 2, time(9, 0), time(17, 0), availability_map
+    )
+    assert result is True
+
+
+def test_is_available_multiple_windows_none_covers():
+    availability_map = {
+        EMPLOYEE_ID: {
+            2: [
+                (time(9, 0), time(12, 0)),
+                (time(14, 0), time(17, 0)),
+            ]
+        }
+    }
+    result = ScheduleGenerator._is_available(
+        EMPLOYEE_ID, 2, time(9, 0), time(17, 0), availability_map
+    )
+    assert result is False
+
+
+# === _load_availability ===
+
+def test_load_availability_builds_map():
+    rows = [
+        {"employee_id": EMPLOYEE_ID, "day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00"},
+        {"employee_id": EMPLOYEE_ID, "day_of_week": 3, "start_time": "11:00:00", "end_time": "20:00:00"},
+        {"employee_id": EMPLOYEE_ID_2, "day_of_week": 2, "start_time": "09:00:00", "end_time": "13:00:00"},
+    ]
+    mock_sb = make_supabase_chain(return_data=rows)
+    gen = ScheduleGenerator(mock_sb)
+
+    result = gen._load_availability(RESTAURANT_ID)
+
+    assert EMPLOYEE_ID in result
+    assert EMPLOYEE_ID_2 in result
+    assert 2 in result[EMPLOYEE_ID]
+    assert 3 in result[EMPLOYEE_ID]
+    assert result[EMPLOYEE_ID][2] == [(time(9, 0), time(17, 0))]
+    assert result[EMPLOYEE_ID_2][2] == [(time(9, 0), time(13, 0))]
+
+
+def test_load_availability_empty_returns_empty_map():
+    mock_sb = make_supabase_chain(return_data=[])
+    gen = ScheduleGenerator(mock_sb)
+    result = gen._load_availability(RESTAURANT_ID)
+    assert result == {}
+
+
+def test_load_availability_multiple_windows_same_day():
+    """Multiple availability windows for the same employee+day accumulate in a list."""
+    rows = [
+        {"employee_id": EMPLOYEE_ID, "day_of_week": 2, "start_time": "09:00:00", "end_time": "13:00:00"},
+        {"employee_id": EMPLOYEE_ID, "day_of_week": 2, "start_time": "15:00:00", "end_time": "20:00:00"},
+    ]
+    mock_sb = make_supabase_chain(return_data=rows)
+    gen = ScheduleGenerator(mock_sb)
+
+    result = gen._load_availability(RESTAURANT_ID)
+    assert len(result[EMPLOYEE_ID][2]) == 2
+
+
+def test_load_availability_filters_by_restaurant():
+    mock_sb = make_supabase_chain(return_data=[])
+    gen = ScheduleGenerator(mock_sb)
+    gen._load_availability(RESTAURANT_ID)
+    mock_sb.eq.assert_any_call("restaurant_id", RESTAURANT_ID)
+
+
+# === generate_schedule with availability ===
+
+def test_generate_schedule_respects_availability(sample_schedule, sample_employee):
+    """Employee marked unavailable on the shift day is excluded; shift goes unfilled."""
+    # availability_map: employee is available Wednesday (3) but shift is Tuesday (2)
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.return_value = MagicMock(data=[])
+
+    gen = _make_generator(mock_sb, sample_schedule, [sample_employee])
+    gen._load_availability = MagicMock(
+        return_value={EMPLOYEE_ID: {3: [(time(9, 0), time(17, 0))]}}
+    )
+
+    tuesday_template = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+    ]
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, tuesday_template)
+
+    assert result["total_shifts"] == 0
+
+
+def test_generate_schedule_available_employee_gets_shift(sample_schedule, sample_employee):
+    """Employee available on the shift day is assigned normally."""
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.return_value = MagicMock(data=[])
+
+    gen = _make_generator(mock_sb, sample_schedule, [sample_employee])
+    gen._load_availability = MagicMock(
+        return_value={EMPLOYEE_ID: {2: [(time(9, 0), time(17, 0))]}}
+    )
+
+    tuesday_template = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+    ]
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, tuesday_template)
+
+    assert result["total_shifts"] == 1
+
+
+def test_generate_schedule_no_availability_set_treats_as_available(sample_schedule, sample_employee):
+    """Employee with no availability rows in the map is treated as available everywhere."""
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.return_value = MagicMock(data=[])
+
+    gen = _make_generator(mock_sb, sample_schedule, [sample_employee])
+    gen._load_availability = MagicMock(return_value={})  # empty map
+
+    tuesday_template = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+    ]
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, tuesday_template)
+
+    assert result["total_shifts"] == 1
+
+
+def test_generate_schedule_availability_skips_one_assigns_other(
+    sample_schedule, sample_employee, sample_employee_2
+):
+    """
+    Two server employees. One available Tuesday, one not.
+    The available one gets the Tuesday shift; the other is skipped.
+    """
+    server2 = {**sample_employee_2, "role": "Server"}
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.return_value = MagicMock(data=[])
+
+    gen = _make_generator(mock_sb, sample_schedule, [sample_employee, server2])
+    # EMPLOYEE_ID available Tue; EMPLOYEE_ID_2 only available Wed
+    gen._load_availability = MagicMock(return_value={
+        EMPLOYEE_ID:   {2: [(time(9, 0), time(17, 0))]},
+        EMPLOYEE_ID_2: {3: [(time(9, 0), time(17, 0))]},
+    })
+
+    tuesday_template = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+    ]
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, tuesday_template)
+
+    assert result["total_shifts"] == 1
+    assigned_shift = mock_sb.insert.call_args[0][0][0]
+    assert assigned_shift["employee_id"] == EMPLOYEE_ID
+
+
+def test_generate_schedule_partial_window_not_available(sample_schedule, sample_employee):
+    """Employee available 09:00–13:00 cannot cover a 09:00–17:00 shift."""
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.return_value = MagicMock(data=[])
+
+    gen = _make_generator(mock_sb, sample_schedule, [sample_employee])
+    gen._load_availability = MagicMock(
+        return_value={EMPLOYEE_ID: {2: [(time(9, 0), time(13, 0))]}}
+    )
+
+    tuesday_template = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+    ]
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, tuesday_template)
+
+    assert result["total_shifts"] == 0
