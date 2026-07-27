@@ -49,9 +49,12 @@ app = FastAPI(
     redirect_slashes=True,
 )
 
-# Middleware order matters — outermost wrapper runs first on the way in and
-# last on the way out. CORS must be outermost so preflight responses are sent
-# before any auth/logging work happens.
+# DEBUG
+logger.info(f"🔧 Environment: {settings.ENVIRONMENT}")
+logger.info(f"🔧 CORS_ORIGINS raw: {settings.CORS_ORIGINS}")
+logger.info(f"🔧 CORS_ORIGINS list: {settings.cors_origins_list}")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,

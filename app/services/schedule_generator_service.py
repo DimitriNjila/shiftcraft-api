@@ -158,6 +158,9 @@ class ScheduleGenerator:
         if existing_schedule:
             self._preload_existing_shifts(schedule["id"], employee_hours, last_shift_end)
 
+        # Load availability once — { employee_id: { day_of_week: [(start, end), ...] } }
+        availability_map = self._load_availability(str(restaurant_id))
+
         created_shifts = []
 
         for template in shift_templates:
@@ -192,6 +195,9 @@ class ScheduleGenerator:
                     if self._has_sufficient_rest(last_shift_end[emp["id"]], shift_start_dt)
                     and not self._would_exceed_hours_cap(
                         emp, employee_hours[emp["id"]], duration
+                    )
+                    and self._is_available(
+                        emp["id"], day_of_week, start_time, end_time, availability_map
                     )
                 ]
 
@@ -241,6 +247,71 @@ class ScheduleGenerator:
             "total_shifts": len(created_shifts),
             "status": "Completed",
         }
+
+    def _load_availability(
+        self, restaurant_id: str
+    ) -> Dict[str, Dict[int, List[tuple]]]:
+        """
+        Load all availability windows for active employees in the restaurant.
+
+        Returns a nested dict:
+            { employee_id: { day_of_week: [(start_time, end_time), ...] } }
+
+        Employees with no rows are absent from the map — the caller treats that
+        as "no preference set, available for everything".
+        """
+        response = (
+            self.supabase.table("employee_availability")
+            .select("employee_id, day_of_week, start_time, end_time")
+            .eq("restaurant_id", restaurant_id)
+            .execute()
+        )
+
+        availability_map: Dict[str, Dict[int, List[tuple]]] = {}
+        for row in response.data:
+            emp_id = row["employee_id"]
+            day = row["day_of_week"]
+            window = (
+                self.parse_time(row["start_time"]),
+                self.parse_time(row["end_time"]),
+            )
+            availability_map.setdefault(emp_id, {}).setdefault(day, []).append(window)
+
+        logger.info(
+            "Loaded availability for %d employees (restaurant_id=%s)",
+            len(availability_map),
+            restaurant_id,
+        )
+        return availability_map
+
+    @staticmethod
+    def _is_available(
+        employee_id: str,
+        day_of_week: int,
+        shift_start: time,
+        shift_end: time,
+        availability_map: Dict[str, Dict[int, List[tuple]]],
+    ) -> bool:
+        """
+        Return True if the employee is available for the full shift window.
+
+        Rules:
+        - Employee not in map → no availability set → available for all shifts.
+        - Employee in map but no entry for this day → unavailable that day.
+        - Employee has entries for this day → at least one window must fully
+          cover the shift (window.start <= shift.start AND window.end >= shift.end).
+        """
+        if employee_id not in availability_map:
+            return True
+
+        day_windows = availability_map[employee_id].get(day_of_week)
+        if not day_windows:
+            return False
+
+        return any(
+            avail_start <= shift_start and avail_end >= shift_end
+            for avail_start, avail_end in day_windows
+        )
 
     def _preload_existing_shifts(
         self,

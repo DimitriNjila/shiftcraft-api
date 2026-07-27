@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: str
 
     # CORS origins
-    CORS_ORIGINS: str = "http://localhost:5173"
+    CORS_ORIGINS: str
 
     @property
     def cors_origins_list(self) -> List[str]:
@@ -19,7 +19,7 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
     # AI
-    ANTHROPIC_API_KEY: Optional[str] = None
+    GROQ_API_KEY: Optional[str] = None
 
     # Observability
     SENTRY_DSN: Optional[str] = None
