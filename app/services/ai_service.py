@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,28 @@ from ..core.config import settings
 logger = logging.getLogger(__name__)
 
 MODEL = "llama-3.3-70b-versatile"
+
+_VISION_SYSTEM_PROMPT = """You are extracting a restaurant shift schedule from an image — a photo or screenshot of a handwritten or printed schedule table.
+
+Return ONLY valid JSON matching this exact schema — no markdown, no extra text:
+
+{
+  "shifts": [
+    {
+      "day_of_week": <int 1-7, 1=Monday...7=Sunday, or null if unclear>,
+      "start_time": <string "HH:MM" or "HH:MM:SS", or null if unclear>,
+      "end_time": <string "HH:MM" or "HH:MM:SS", or null if unclear>,
+      "role": <string, or null if unclear>,
+      "count": <int number of employees needed for this shift, or null if unclear>
+    }
+  ]
+}
+
+Rules:
+- One element per distinct shift you can identify in the image.
+- If ANY field is ambiguous, illegible, or you are not confident about it, use null for that field rather than guessing.
+- Do not invent shifts that aren't visible in the image.
+- Return {"shifts": []} if no shifts are identifiable."""
 
 _SYSTEM_PROMPT = """You are a restaurant scheduling expert. Analyze weekly staff schedules and return a structured JSON report that managers can act on immediately.
 
@@ -115,6 +138,79 @@ class AIService:
 
         logger.info("Schedule analysis complete for id=%s", schedule.get("id"))
         return result
+
+    def analyze_image_for_templates(
+        self, image_bytes: bytes, mime_type: str = "image/jpeg"
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract candidate shift templates from a photo/screenshot of a schedule.
+
+        All Groq-specific details (model choice, image encoding, message
+        shape) live in this one method. Callers depend only on the
+        (image bytes, mime_type) -> List[Dict] contract, so swapping the
+        model (GROQ_VISION_MODEL) or the provider entirely later only touches
+        this method — not the import/validation pipeline that consumes it.
+
+        Args:
+            image_bytes: Raw image content
+            mime_type: Image MIME type (e.g. "image/jpeg", "image/png")
+
+        Returns:
+            List of raw shift dicts (day_of_week, start_time, end_time, role,
+            count) — fields may be None where the model flagged uncertainty.
+            Not yet validated; pass through validate_parsed_templates.
+
+        Raises:
+            ValueError: If the model's response can't be parsed into the
+                        expected shape.
+        """
+        logger.info("Analysing schedule image (%d bytes, %s)", len(image_bytes), mime_type)
+
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+        response = self._client.chat.completions.create(
+            model=settings.GROQ_VISION_MODEL,
+            messages=[
+                {"role": "system", "content": _VISION_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extract every shift you can identify from this schedule image.",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{b64_image}"},
+                        },
+                    ],
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,  # low temp — this is extraction, not generation
+            max_tokens=2048,
+        )
+
+        raw = response.choices[0].message.content.strip()
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.error("Vision model returned invalid JSON: %s", e)
+            raise ValueError(f"Vision model returned malformed JSON: {e}") from e
+
+        if isinstance(parsed, list):
+            shifts = parsed
+        elif isinstance(parsed, dict):
+            shifts = parsed.get("shifts")
+        else:
+            shifts = None
+
+        if not isinstance(shifts, list):
+            raise ValueError("Vision model response missing a 'shifts' array")
+
+        logger.info("Vision model identified %d candidate shift(s)", len(shifts))
+        return shifts
 
     @staticmethod
     def _build_analysis_prompt(

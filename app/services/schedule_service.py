@@ -1,4 +1,5 @@
 import logging
+import secrets
 
 from datetime import date, timedelta, datetime
 from typing import List, Optional, Dict, Any
@@ -323,6 +324,194 @@ class ScheduleService:
         )
         logger.info("Schedule deleted id=%s", schedule_id)
         return response.data[0] if response.data else existing
+
+    def generate_share_link(self, schedule_id) -> Dict[str, Any]:
+        """
+        Create (or rotate) a public share link for a schedule.
+
+        Args:
+            schedule_id: Schedule to generate a link for
+
+        Returns:
+            Updated schedule dictionary with share_token, share_enabled, share_expires_at
+
+        Raises:
+            ScheduleNotFoundError: If the schedule doesn't exist
+        """
+        existing = self.get_schedule_by_id(schedule_id)
+        if not existing:
+            raise ScheduleNotFoundError(schedule_id)
+
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.utcnow() + timedelta(days=7)
+
+        logger.info("Generating share link for schedule id=%s", schedule_id)
+        response = (
+            self.supabase.table(self.table_name)
+            .update(
+                {
+                    "share_token": token,
+                    "share_enabled": True,
+                    "share_expires_at": expires_at.isoformat(),
+                }
+            )
+            .eq("id", str(schedule_id))
+            .execute()
+        )
+        result = response.data[0] if response.data else existing
+        logger.info("Share link generated for schedule id=%s", schedule_id)
+        return result
+
+    def revoke_share_link(self, schedule_id) -> Dict[str, Any]:
+        """
+        Disable the public share link for a schedule.
+
+        Args:
+            schedule_id: Schedule to revoke the link for
+
+        Returns:
+            Updated schedule dictionary
+
+        Raises:
+            ScheduleNotFoundError: If the schedule doesn't exist
+        """
+        existing = self.get_schedule_by_id(schedule_id)
+        if not existing:
+            raise ScheduleNotFoundError(schedule_id)
+
+        logger.info("Revoking share link for schedule id=%s", schedule_id)
+        response = (
+            self.supabase.table(self.table_name)
+            .update({"share_enabled": False})
+            .eq("id", str(schedule_id))
+            .execute()
+        )
+        result = response.data[0] if response.data else existing
+        logger.info("Share link revoked for schedule id=%s", schedule_id)
+        return result
+
+    def get_schedule_by_share_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a schedule via its public share token for the unauthenticated
+        share endpoint. Returns None (never raises) for any invalid state —
+        unknown token, disabled link, or expired link — so the caller can
+        return a uniform 404 without leaking which case applied.
+
+        Args:
+            token: Public share token
+
+        Returns:
+            Minimal public schedule dict (restaurant_name, week_start, shifts)
+            or None if the token doesn't resolve to an active, unexpired link.
+        """
+        logger.debug("Looking up schedule by share_token")
+        response = (
+            self.supabase.table(self.table_name)
+            .select("*")
+            .eq("share_token", token)
+            .eq("share_enabled", True)
+            .execute()
+        )
+
+        if not response.data:
+            logger.info("Share token not found or disabled")
+            return None
+
+        schedule = response.data[0]
+
+        if self._is_share_expired(schedule.get("share_expires_at")):
+            logger.info("Share token expired for schedule id=%s", schedule.get("id"))
+            return None
+
+        shifts_response = (
+            self.supabase.table("shifts")
+            .select("*, employee:employees(name, role)")
+            .eq("schedule_id", str(schedule["id"]))
+            .order("shift_date")
+            .order("start_time")
+            .execute()
+        )
+
+        restaurant_name = self.get_restaurant_name(schedule.get("restaurant_id"))
+
+        shifts = []
+        for shift in shifts_response.data:
+            employee = shift.get("employee") or {}
+            shifts.append(
+                {
+                    "employee_name": employee.get("name", "Unknown"),
+                    "role": employee.get("role", "Unknown"),
+                    "shift_date": shift["shift_date"],
+                    "start_time": shift["start_time"],
+                    "end_time": shift["end_time"],
+                }
+            )
+
+        logger.info(
+            "Public schedule resolved via share token id=%s shifts=%d",
+            schedule.get("id"),
+            len(shifts),
+        )
+        return {
+            "restaurant_name": restaurant_name,
+            "week_start": schedule["week_start"],
+            "shifts": shifts,
+        }
+
+    @staticmethod
+    def _is_share_expired(expires_at_raw: Optional[str]) -> bool:
+        """True if a share_expires_at timestamp is missing or in the past."""
+        if not expires_at_raw:
+            return True
+        expires_at = datetime.fromisoformat(expires_at_raw.replace("Z", "+00:00"))
+        now = datetime.now(expires_at.tzinfo) if expires_at.tzinfo else datetime.utcnow()
+        return expires_at <= now
+
+    def get_restaurant_name(self, restaurant_id) -> str:
+        """
+        Look up a restaurant's display name. Falls back to the raw
+        restaurant_id if the restaurants table has no matching row.
+        """
+        if not restaurant_id:
+            return "Unknown"
+        response = (
+            self.supabase.table("restaurants")
+            .select("name")
+            .eq("id", restaurant_id)
+            .execute()
+        )
+        if response.data:
+            return response.data[0].get("name", str(restaurant_id))
+        return str(restaurant_id)
+
+    def is_valid_share_token(self, schedule_id, token: str) -> bool:
+        """
+        Check whether `token` is the active, unexpired share token for a
+        specific schedule. Used to authorize unauthenticated access to
+        schedule sub-resources (e.g. iCal export) that must work for both
+        logged-in managers and employees following a share link.
+
+        Args:
+            schedule_id: Schedule the token must belong to
+            token: Share token presented by the caller
+
+        Returns:
+            True if the token is valid, enabled, and unexpired for this schedule
+        """
+        if not token:
+            return False
+
+        schedule = self.get_schedule_by_id(schedule_id)
+        if not schedule:
+            return False
+
+        if not schedule.get("share_enabled"):
+            return False
+
+        if schedule.get("share_token") != token:
+            return False
+
+        return not self._is_share_expired(schedule.get("share_expires_at"))
 
 
 schedule_service = ScheduleService()

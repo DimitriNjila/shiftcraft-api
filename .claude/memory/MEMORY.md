@@ -1,0 +1,1 @@
+- [ShiftCraft API — project context and recent work](project_shiftcraft_context.md) — architecture, design decisions, availability feature, AI rewrite, pending frontend work
