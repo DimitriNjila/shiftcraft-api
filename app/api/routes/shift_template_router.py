@@ -7,7 +7,7 @@ from ...models.template_import_model import (
 )
 from ...services.ai_service import AIServiceUnavailableError
 from ...services.shift_template_service import shift_template_service
-from ...services.template_import_service import template_import_service
+from ...services.template_import_service import InvalidImageError, template_import_service
 from ...core.auth import get_current_user
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
@@ -90,24 +90,26 @@ async def parse_template_image_import(file: UploadFile = File(...)):
     Uses the exact same preview shape as /import/parse (CSV/Excel) — rows are
     flagged with confidence + validation errors/warnings, nothing is saved.
     Save confirmed rows via the same /import/confirm endpoint.
-    """
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Expected an image file, got content type {file.content_type!r}",
-        )
 
+    Accepts any image format Pillow can decode, including HEIC/HEIF (iPhone's
+    default camera format) — it's normalized to JPEG before reaching the
+    vision model. The browser-reported content-type is NOT used to reject
+    uploads; it's unreliable (e.g. some clients send HEIC as
+    application/octet-stream) and decoding is a strictly more accurate check.
+    """
     image_bytes = await file.read()
     try:
         rows = template_import_service.parse_template_image(
             image_bytes, file.content_type
         )
+    except InvalidImageError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except AIServiceUnavailableError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
     except ValueError as e:
-        # At this point the file type is already known-good, so a ValueError
-        # here means the vision model's response couldn't be parsed — an
-        # upstream failure, not a bad request.
+        # The image decoded fine, so a ValueError here means the vision
+        # model's response couldn't be parsed — an upstream failure, not a
+        # bad request.
         logger.error("Vision model response unusable for image import: %s", e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

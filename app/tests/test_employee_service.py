@@ -2,7 +2,11 @@ import pytest
 from unittest.mock import MagicMock
 from uuid import UUID
 
-from app.services.employee_service import EmployeeService, EmployeeNotFoundError
+from app.services.employee_service import (
+    EmployeeService,
+    EmployeeHasShiftsError,
+    EmployeeNotFoundError,
+)
 from app.tests.conftest import make_supabase_chain, EMPLOYEE_ID, RESTAURANT_ID
 
 
@@ -117,18 +121,21 @@ def test_update_employee_no_changes(sample_employee):
     assert result["id"] == EMPLOYEE_ID
 
 
-# === delete_employee ===
+# === delete_employee (hard delete) ===
 
 def test_delete_employee_success(sample_employee):
     mock_sb = make_supabase_chain()
     mock_sb.execute.side_effect = [
         MagicMock(data=[sample_employee]),  # get_employee_by_id
-        MagicMock(data=[sample_employee]),  # delete
+        MagicMock(data=[]),                 # shifts existence check -> none
+        MagicMock(data=[]),                 # delete availability windows
+        MagicMock(data=[sample_employee]),  # delete employee
     ]
     svc = EmployeeService(mock_sb)
     result = svc.delete_employee(UUID(EMPLOYEE_ID))
     assert result["id"] == EMPLOYEE_ID
-    mock_sb.delete.assert_called_once()
+    # two deletes happen: availability cleanup, then the employee row itself
+    assert mock_sb.delete.call_count == 2
 
 
 def test_delete_employee_not_found():
@@ -136,6 +143,32 @@ def test_delete_employee_not_found():
     svc = EmployeeService(mock_sb)
     with pytest.raises(EmployeeNotFoundError):
         svc.delete_employee(UUID(EMPLOYEE_ID))
+
+
+def test_delete_employee_blocked_when_shifts_exist(sample_employee, sample_shift):
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.side_effect = [
+        MagicMock(data=[sample_employee]),  # get_employee_by_id
+        MagicMock(data=[sample_shift]),     # shifts existence check -> found
+    ]
+    svc = EmployeeService(mock_sb)
+    with pytest.raises(EmployeeHasShiftsError):
+        svc.delete_employee(UUID(EMPLOYEE_ID))
+    # blocked before any delete is attempted
+    mock_sb.delete.assert_not_called()
+
+
+def test_delete_employee_checks_shifts_scoped_to_employee(sample_employee):
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.side_effect = [
+        MagicMock(data=[sample_employee]),
+        MagicMock(data=[]),
+        MagicMock(data=[]),
+        MagicMock(data=[sample_employee]),
+    ]
+    svc = EmployeeService(mock_sb)
+    svc.delete_employee(UUID(EMPLOYEE_ID))
+    mock_sb.eq.assert_any_call("employee_id", EMPLOYEE_ID)
 
 
 # === deactivate_employee ===

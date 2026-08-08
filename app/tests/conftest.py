@@ -20,7 +20,7 @@ def make_supabase_chain(return_data=None):
     """Build a chainable Supabase mock where every method returns itself and
     .execute() returns a MagicMock with the given data list."""
     chain = MagicMock()
-    for method in ("table", "select", "insert", "update", "upsert", "delete", "eq", "neq", "gte", "lte", "order"):
+    for method in ("table", "select", "insert", "update", "upsert", "delete", "eq", "neq", "gte", "lte", "order", "limit"):
         getattr(chain, method).return_value = chain
     chain.execute.return_value = MagicMock(data=return_data if return_data is not None else [])
     return chain

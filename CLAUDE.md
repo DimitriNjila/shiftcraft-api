@@ -83,4 +83,4 @@ PostgreSQL (via Supabase)
 - Times stored as `HH:MM:SS` strings
 - Dates stored as ISO format strings
 - UUIDs are converted to strings for Supabase operations
-- Employee deletion is a soft delete (sets `is_active=False`), not a hard delete
+- Employee deletion is split in two: `POST /employees/{id}/deactivate` soft-deletes (`is_active=False`) — this is the "Disable" action and the safe default for anyone who's worked a shift. `DELETE /employees/{id}` hard-deletes and is blocked with `409` if the employee has any shift history (`EmployeeHasShiftsError`); it does clean up the employee's `employee_availability` rows first, since those have no historical value.

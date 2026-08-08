@@ -11,25 +11,28 @@ logger = logging.getLogger(__name__)
 
 MODEL = "llama-3.3-70b-versatile"
 
-_VISION_SYSTEM_PROMPT = """You are extracting a restaurant shift schedule from an image — a photo or screenshot of a handwritten or printed schedule table.
+_VISION_SYSTEM_PROMPT = """You are extracting a restaurant shift schedule from an image — a photo or screenshot of a handwritten or printed schedule table. Most schedules like this (whiteboards especially) show employee NAMES, not job roles — that's expected, not a gap.
 
 Return ONLY valid JSON matching this exact schema — no markdown, no extra text:
 
 {
   "shifts": [
     {
+      "name": <string, the employee's name as written, or null if unclear>,
       "day_of_week": <int 1-7, 1=Monday...7=Sunday, or null if unclear>,
       "start_time": <string "HH:MM" or "HH:MM:SS", or null if unclear>,
       "end_time": <string "HH:MM" or "HH:MM:SS", or null if unclear>,
-      "role": <string, or null if unclear>,
-      "count": <int number of employees needed for this shift, or null if unclear>
+      "role": <string, or null>,
+      "count": <int number of employees needed for this shift — use 1 unless the image explicitly groups multiple people under one row>
     }
   ]
 }
 
 Rules:
 - One element per distinct shift you can identify in the image.
-- If ANY field is ambiguous, illegible, or you are not confident about it, use null for that field rather than guessing.
+- Extract "name" whenever a person's name appears next to a shift — this is the primary identifier for most schedules and should be populated far more often than "role".
+- Only set "role" when a role/position label is unambiguously present right next to the name or shift (e.g. "(Server)", a colored badge with a role name, an explicit "Role" column). Do NOT infer or guess a role from a name, context, or typical scheduling patterns — leave it null instead.
+- If ANY other field is ambiguous, illegible, or you are not confident about it, use null for that field rather than guessing.
 - Do not invent shifts that aren't visible in the image.
 - Return {"shifts": []} if no shifts are identifiable."""
 
@@ -156,9 +159,12 @@ class AIService:
             mime_type: Image MIME type (e.g. "image/jpeg", "image/png")
 
         Returns:
-            List of raw shift dicts (day_of_week, start_time, end_time, role,
-            count) — fields may be None where the model flagged uncertainty.
-            Not yet validated; pass through validate_parsed_templates.
+            List of raw shift dicts (name, day_of_week, start_time, end_time,
+            role, count) — fields may be None where the model flagged
+            uncertainty. `role` is null by default unless an explicit role
+            label was visible; callers resolve it from `name` via the
+            employee roster. Not yet validated; pass through
+            validate_parsed_templates.
 
         Raises:
             ValueError: If the model's response can't be parsed into the

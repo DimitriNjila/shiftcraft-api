@@ -96,36 +96,137 @@ def test_parse_unsupported_file_type(import_service):
         import_service.parse_template_file(b"not a real file", "templates.pdf")
 
 
+def test_parse_csv_name_column_no_role_column_is_valid(import_service):
+    csv = _csv_bytes(
+        "Name,Day,Shift Start,Shift End\n"
+        "Mya Ferrari,Tue,11:00,16:00\n"
+    )
+    rows, mapping = import_service.parse_template_file(csv, "whiteboard_export.csv")
+    assert mapping["name"] == "Name"
+    assert "role" not in mapping
+
+    validated = import_service.validate_parsed_templates(rows)
+    assert validated[0]["is_valid"] is True
+    assert validated[0]["name"] == "Mya Ferrari"
+    assert validated[0]["role"] is None
+
+
+def test_employee_role_header_maps_to_role_not_name(import_service):
+    """"Employee Role" shouldn't get claimed by the "name" synonym's substring fallback."""
+    csv = _csv_bytes(
+        "Day,Start,End,Employee Role,Count\n"
+        "2,09:00:00,17:00:00,Server,1\n"
+    )
+    rows, mapping = import_service.parse_template_file(csv, "templates.csv")
+    assert mapping["role"] == "Employee Role"
+    assert mapping.get("name") != "Employee Role"
+
+
 # === parse_template_image ===
 
 
-def test_parse_template_image_rejects_non_image_mime(import_service):
-    with pytest.raises(ValueError, match="image"):
-        import_service.parse_template_image(b"whatever", "application/pdf")
+def _png_bytes(size=(100, 80), color=(200, 50, 50)) -> bytes:
+    from PIL import Image
+    img = Image.new("RGB", size, color=color)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _heic_bytes(size=(100, 80), color=(50, 120, 200)) -> bytes:
+    from PIL import Image
+    img = Image.new("RGB", size, color=color)
+    buf = io.BytesIO()
+    img.save(buf, format="HEIF", quality=80)
+    return buf.getvalue()
+
+
+def _mock_ai_returning(shifts):
+    mock_ai = MagicMock()
+    mock_ai.analyze_image_for_templates.return_value = shifts
+    return mock_ai
+
+
+def test_parse_template_image_rejects_undecodable_bytes(import_service):
+    from app.services.template_import_service import InvalidImageError
+    with pytest.raises(InvalidImageError):
+        import_service.parse_template_image(b"this is not an image", "image/png")
+
+
+def test_parse_template_image_ignores_mismatched_content_type(import_service):
+    """A real PNG mislabeled as application/pdf should still decode and process —
+    decoding is the source of truth, not the browser-reported content-type."""
+    mock_ai = _mock_ai_returning([])
+    with patch("app.services.template_import_service.get_ai_service", return_value=mock_ai):
+        rows = import_service.parse_template_image(_png_bytes(), "application/octet-stream")
+    assert rows == []
+    mock_ai.analyze_image_for_templates.assert_called_once()
+    # normalized to JPEG regardless of what content-type was declared
+    assert mock_ai.analyze_image_for_templates.call_args[0][1] == "image/jpeg"
+
+
+def test_parse_template_image_converts_heic(import_service):
+    """The bug this whole normalization step exists for: iPhone HEIC photos."""
+    mock_ai = _mock_ai_returning([])
+    with patch("app.services.template_import_service.get_ai_service", return_value=mock_ai):
+        rows = import_service.parse_template_image(_heic_bytes(), "image/heic")
+    assert rows == []
+    sent_bytes, sent_mime = mock_ai.analyze_image_for_templates.call_args[0]
+    assert sent_mime == "image/jpeg"
+    assert sent_bytes[:2] == b"\xff\xd8"  # JPEG magic bytes
+
+
+def test_parse_template_image_downscales_large_images(import_service):
+    from app.services.template_import_service import _MAX_IMAGE_DIMENSION
+    from PIL import Image
+    mock_ai = _mock_ai_returning([])
+    huge = _png_bytes(size=(4000, 3000))
+    with patch("app.services.template_import_service.get_ai_service", return_value=mock_ai):
+        import_service.parse_template_image(huge, "image/png")
+    sent_bytes, _ = mock_ai.analyze_image_for_templates.call_args[0]
+    resized = Image.open(io.BytesIO(sent_bytes))
+    assert max(resized.size) <= _MAX_IMAGE_DIMENSION
 
 
 def test_parse_template_image_happy_path(import_service):
-    mock_ai = MagicMock()
-    mock_ai.analyze_image_for_templates.return_value = [
-        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
-    ]
+    mock_ai = _mock_ai_returning([
+        {"name": "Mya Ferrari", "day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+    ])
     with patch("app.services.template_import_service.get_ai_service", return_value=mock_ai):
-        rows = import_service.parse_template_image(b"image-bytes", "image/png")
+        rows = import_service.parse_template_image(_png_bytes(), "image/png")
 
     assert len(rows) == 1
     assert rows[0]["confidence"] == "high"
     validated = import_service.validate_parsed_templates(rows)
     assert validated[0]["is_valid"] is True
     assert validated[0]["confidence"] == "high"
+    assert validated[0]["name"] == "Mya Ferrari"
+
+
+def test_parse_template_image_name_only_no_role_is_still_valid(import_service):
+    """The common whiteboard case: name is extracted, role is not — this must NOT be an error."""
+    mock_ai = _mock_ai_returning([
+        {"name": "Mya Ferrari", "day_of_week": 2, "start_time": "11:00:00", "end_time": "16:00:00", "role": None, "count": None},
+    ])
+    with patch("app.services.template_import_service.get_ai_service", return_value=mock_ai):
+        rows = import_service.parse_template_image(_png_bytes(), "image/png")
+
+    # role being null doesn't count against confidence — name/day/times are all present
+    assert rows[0]["confidence"] == "high"
+    validated = import_service.validate_parsed_templates(rows)
+    assert validated[0]["is_valid"] is True
+    assert validated[0]["role"] is None
+    assert validated[0]["name"] == "Mya Ferrari"
+    assert not any("role" in e for e in validated[0]["errors"])
+    assert any("role" in w for w in validated[0]["warnings"])
 
 
 def test_parse_template_image_low_confidence_on_null_fields(import_service):
-    mock_ai = MagicMock()
-    mock_ai.analyze_image_for_templates.return_value = [
-        {"day_of_week": 2, "start_time": None, "end_time": "17:00:00", "role": "Server", "count": None},
-    ]
+    mock_ai = _mock_ai_returning([
+        {"name": "Mya Ferrari", "day_of_week": 2, "start_time": None, "end_time": "17:00:00", "role": "Server", "count": None},
+    ])
     with patch("app.services.template_import_service.get_ai_service", return_value=mock_ai):
-        rows = import_service.parse_template_image(b"image-bytes", "image/png")
+        rows = import_service.parse_template_image(_png_bytes(), "image/png")
 
     assert rows[0]["confidence"] == "low"
     validated = import_service.validate_parsed_templates(rows)
@@ -134,20 +235,31 @@ def test_parse_template_image_low_confidence_on_null_fields(import_service):
     assert validated[0]["confidence"] == "low"
 
 
+def test_parse_template_image_neither_name_nor_role_is_error(import_service):
+    mock_ai = _mock_ai_returning([
+        {"name": None, "day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": None, "count": 1},
+    ])
+    with patch("app.services.template_import_service.get_ai_service", return_value=mock_ai):
+        rows = import_service.parse_template_image(_png_bytes(), "image/png")
+
+    validated = import_service.validate_parsed_templates(rows)
+    assert validated[0]["is_valid"] is False
+    assert any("name or role" in e for e in validated[0]["errors"])
+
+
 def test_parse_template_image_propagates_ai_unavailable(import_service):
     with patch(
         "app.services.template_import_service.get_ai_service",
         side_effect=AIServiceUnavailableError("GROQ_API_KEY is not configured."),
     ):
         with pytest.raises(AIServiceUnavailableError):
-            import_service.parse_template_image(b"image-bytes", "image/png")
+            import_service.parse_template_image(_png_bytes(), "image/png")
 
 
 def test_parse_template_image_empty_shifts(import_service):
-    mock_ai = MagicMock()
-    mock_ai.analyze_image_for_templates.return_value = []
+    mock_ai = _mock_ai_returning([])
     with patch("app.services.template_import_service.get_ai_service", return_value=mock_ai):
-        rows = import_service.parse_template_image(b"image-bytes", "image/png")
+        rows = import_service.parse_template_image(_png_bytes(), "image/png")
     assert rows == []
 
 

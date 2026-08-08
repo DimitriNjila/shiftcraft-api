@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+import pillow_heif
+from PIL import Image, UnidentifiedImageError
 
 from ..core.constants import DayOfWeek
 from .ai_service import get_ai_service
@@ -12,9 +14,33 @@ from .shift_template_service import ShiftTemplateService
 
 logger = logging.getLogger(__name__)
 
+
+class InvalidImageError(ValueError):
+    """Raised when uploaded bytes can't be decoded as an image at all —
+    distinct from a ValueError meaning the vision model's response was bad,
+    since the two map to different HTTP statuses (400 vs 502)."""
+
+
+# Registers HEIC/HEIF support with Pillow — without this, Image.open() can't
+# read the format iPhones shoot in by default. Safe/cheap to call at import
+# time; only needs to happen once per process.
+pillow_heif.register_heif_opener()
+
+# Vision models (Groq's included) reliably accept JPEG/PNG/WEBP but not
+# HEIC/HEIF, TIFF, BMP, etc. — and browser-reported content-type isn't
+# trustworthy enough to gate on alone. So every uploaded image is decoded
+# and re-encoded as JPEG before it reaches the model, regardless of what the
+# client claimed it was.
+_MAX_IMAGE_DIMENSION = 2048  # iPhone photos are often 4000px+; no need to ship that much detail
+
 # Best-guess header -> normalized field mapping. Matched against a lowercased,
 # whitespace/punctuation-stripped version of each source column header.
+#
+# "name" synonyms are deliberately conservative (no bare "employee" or
+# "staff") to avoid colliding with "Employee Role" / "Staff Position"
+# style headers, which should map to "role" instead.
 FIELD_SYNONYMS: Dict[str, List[str]] = {
+    "name": ["name", "employeename", "staffname", "who"],
     "day_of_week": ["dayofweek", "day", "weekday", "dow"],
     "start_time": ["starttime", "start", "from", "begins", "opens", "shiftstart"],
     "end_time": ["endtime", "end", "to", "finishes", "closes", "shiftend"],
@@ -26,8 +52,6 @@ _DAY_NAME_TO_ISO = {name.lower(): member.value for name, member in DayOfWeek.__m
 _DAY_ABBR_TO_ISO = {name.lower()[:3]: member.value for name, member in DayOfWeek.__members__.items()}
 
 _TIME_FORMATS = ["%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p", "%I%p", "%I %p"]
-
-REQUIRED_FIELDS = ("day_of_week", "start_time", "end_time", "role")
 
 
 def _normalize_header(header: str) -> str:
@@ -58,8 +82,8 @@ class TemplateImportService:
 
         Returns:
             (rows, column_mapping) where rows is a list of dicts with keys
-            from REQUIRED_FIELDS + "count" (raw/untyped values, still strings)
-            and column_mapping maps normalized_field -> source column header
+            from FIELD_SYNONYMS (raw/untyped values, still strings) and
+            column_mapping maps normalized_field -> source column header
             (only for fields a column was found for).
 
         Raises:
@@ -138,34 +162,72 @@ class TemplateImportService:
             mime_type: Image MIME type (e.g. "image/jpeg", "image/png")
 
         Returns:
-            List of raw row dicts with a "confidence" of "low" (the model
-            flagged at least one field as unclear) or "high".
+            List of raw row dicts with a "confidence" of "low" or "high".
+            `role` is frequently null here by design — most schedule photos
+            (whiteboards etc.) show names, not role labels, and the caller
+            is expected to resolve role from name via the employee roster.
+            A null role therefore does NOT lower confidence; a null name,
+            day_of_week, start_time, or end_time does.
 
         Raises:
-            ValueError: If the file isn't an image, or the vision model's
+            InvalidImageError: If the bytes can't be decoded as an image at
+                                all — browser-reported content-type is NOT
+                                trusted for this; decoding is the real check
+            ValueError: If the file decodes fine but the vision model's
                         response can't be parsed
             AIServiceUnavailableError: If GROQ_API_KEY isn't configured
         """
-        if not mime_type or not mime_type.startswith("image/"):
-            raise ValueError(f"Expected an image file, got content type {mime_type!r}")
+        jpeg_bytes = self._normalize_to_jpeg(image_bytes)
 
         ai = get_ai_service()
-        raw_shifts = ai.analyze_image_for_templates(image_bytes, mime_type)
+        raw_shifts = ai.analyze_image_for_templates(jpeg_bytes, "image/jpeg")
 
         rows = []
         for raw in raw_shifts:
             fields = {
+                "name": raw.get("name"),
                 "day_of_week": raw.get("day_of_week"),
                 "start_time": raw.get("start_time"),
                 "end_time": raw.get("end_time"),
                 "role": raw.get("role"),
                 "count": raw.get("count"),
             }
-            confidence = "low" if any(v is None for v in fields.values()) else "high"
+            confidence_fields = ("name", "day_of_week", "start_time", "end_time")
+            confidence = "low" if any(fields[f] is None for f in confidence_fields) else "high"
             rows.append({**{k: "" if v is None else str(v) for k, v in fields.items()}, "confidence": confidence})
 
         logger.info("Parsed %d rows from image (mime=%s)", len(rows), mime_type)
         return rows
+
+    @staticmethod
+    def _normalize_to_jpeg(image_bytes: bytes) -> bytes:
+        """
+        Decode any Pillow-readable image (including HEIC/HEIF, thanks to
+        pillow_heif) and re-encode it as JPEG, downscaled if it's larger than
+        _MAX_IMAGE_DIMENSION on either side.
+
+        This is what actually fixes "invalid image data" errors from the
+        vision model on iPhone photos — HEIC is iOS's default camera format,
+        and no mainstream vision API accepts it directly.
+
+        Raises:
+            InvalidImageError: If the bytes aren't a readable image at all
+        """
+        try:
+            image = Image.open(io.BytesIO(image_bytes))
+            image.load()  # force full decode now, not lazily inside the request
+        except (UnidentifiedImageError, OSError) as e:
+            raise InvalidImageError(f"Could not read image file: {e}") from e
+
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        if image.width > _MAX_IMAGE_DIMENSION or image.height > _MAX_IMAGE_DIMENSION:
+            image.thumbnail((_MAX_IMAGE_DIMENSION, _MAX_IMAGE_DIMENSION), Image.LANCZOS)
+
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=90)
+        return buf.getvalue()
 
     # === Validation ===
 
@@ -178,15 +240,24 @@ class TemplateImportService:
 
         Returns:
             List of row dicts shaped like ParsedTemplateRow (row_number,
-            day_of_week, start_time, end_time, role, count, errors, warnings,
-            is_valid). Never raises — invalid rows are flagged, not dropped,
-            so the frontend preview can show every row.
+            name, day_of_week, start_time, end_time, role, count, errors,
+            warnings, is_valid). Never raises — invalid rows are flagged,
+            not dropped, so the frontend preview can show every row.
+
+            `role` is optional: a row identified only by `name` (e.g. a
+            whiteboard photo with no role labels) is valid — the caller is
+            expected to resolve role from name via the employee roster
+            before calling /import/confirm, which does still require role.
+            A row with neither name nor role is an error either way, since
+            nothing in it can be resolved to a template.
         """
         validated = []
         for i, raw in enumerate(rows, start=1):
             errors: List[str] = []
             warnings: List[str] = []
             confidence = raw.get("confidence")  # set by image import only; None for file import
+
+            name = str(raw.get("name") or "").strip()
 
             day_of_week = self._parse_day_of_week(raw.get("day_of_week"))
             if day_of_week is None:
@@ -204,8 +275,10 @@ class TemplateImportService:
                 errors.append("end_time must be after start_time")
 
             role = str(raw.get("role") or "").strip()
-            if not role:
-                errors.append("role is required")
+            if not role and not name:
+                errors.append("either name or role is required to identify this shift")
+            elif not role:
+                warnings.append("role not specified — resolve from employee name before saving")
 
             count_raw = str(raw.get("count") or "").strip()
             count: Optional[int] = None
@@ -223,6 +296,7 @@ class TemplateImportService:
             validated.append(
                 {
                     "row_number": i,
+                    "name": name or None,
                     "day_of_week": day_of_week,
                     "start_time": start_time,
                     "end_time": end_time,

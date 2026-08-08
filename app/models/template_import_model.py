@@ -8,6 +8,7 @@ class ParsedTemplateRow(BaseModel):
     """A single parsed + validated row from an imported CSV/Excel/image file."""
 
     row_number: int
+    name: Optional[str] = None
     day_of_week: Optional[int] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
