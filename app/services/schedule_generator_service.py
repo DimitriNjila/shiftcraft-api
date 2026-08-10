@@ -2,7 +2,7 @@ import logging
 
 from collections import defaultdict
 from datetime import date, time, timedelta, datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from uuid import UUID, uuid4
 from supabase import Client
 from ..core.db import get_supabase
@@ -12,6 +12,7 @@ from .schedule_service import ScheduleService
 from .shift_template_service import ShiftTemplateService
 
 from ..core.constants import BELLAGIOS_SHIFT_TEMPLATES
+from ..core.template_utils import dedupe_shift_templates
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +23,26 @@ class ScheduleGenerator:
     """
     Schedule Generator algorithm which handles shifts creation and assignment
 
-    Optimized for:
-    - Speed: Generates typical week in < 1 second
-    - Fairness: Distributes hours evenly across employees while respecting availability and roles
+    Priority order:
+    1. Coverage: fill every shift template if any feasible assignment exists.
+       A template is only left unfilled when every eligible employee would
+       breach a hard constraint (hours cap, rest window, availability) — not
+       merely because a "fairer" candidate wasn't available for that slot.
+    2. Fairness: among employees who are all feasible for a given slot, the
+       one with the fewest hours assigned so far gets it.
+
+    To maximize coverage without a full constraint solver (provably optimal
+    fill is NP-hard here — an employee's own shifts create sequencing
+    dependencies via the rest-window constraint), slots are processed
+    hardest-to-staff first (most-constrained-first): a scarce employee gets
+    first claim on the one slot only they can fill, instead of being spent on
+    an easy slot with many alternative candidates. This is a heuristic, not a
+    guarantee — pathological inputs can still leave an avoidable gap — but it
+    closes the vast majority of realistic cases.
+
+    Re-running generation for a week that already has shifts tops up only
+    the slots still missing (accounting for headcount already filled);
+    duplicate shift templates (day/time/role) are deduplicated on the way in.
 
     Constraints enforced:
     - Minimum rest between shifts: 10 hours
@@ -124,6 +142,11 @@ class ScheduleGenerator:
                     len(BELLAGIOS_SHIFT_TEMPLATES),
                 )
 
+        # Defensive dedup even for saved templates (already deduped on save) —
+        # protects against data saved before that fix shipped, or a caller
+        # passing a raw shift_templates override with accidental duplicates.
+        shift_templates = dedupe_shift_templates(shift_templates)
+
         normalized_week_start = self.schedule_service.get_week_start(week_start)
         existing_schedule = self.schedule_service.get_schedule_by_week(
             normalized_week_start, str(restaurant_id)
@@ -151,17 +174,36 @@ class ScheduleGenerator:
             employees_by_role[employee["role"]].append(employee)
 
         employee_hours: Dict[str, float] = {emp["id"]: 0.0 for emp in employees}
-        last_shift_end: Dict[str, Optional[datetime]] = {emp["id"]: None for emp in employees}
+        # All of an employee's assigned shift (start, end) intervals — not just
+        # the most recent one. Slots are processed hardest-to-staff first, not
+        # strictly in date order, so a chronologically-later shift can be
+        # assigned before an earlier one for the same employee; rest must be
+        # checked against every interval, on whichever side of it a new shift
+        # falls, or an earlier shift can be wrongly rejected against a "gap"
+        # computed the wrong direction.
+        employee_shift_intervals: Dict[str, List[Tuple[datetime, datetime]]] = {
+            emp["id"]: [] for emp in employees
+        }
 
-        # When appending to an existing schedule, preload already-assigned hours and
-        # last shift end times so constraints apply across both old and new shifts.
+        # When appending to an existing schedule, preload already-assigned hours,
+        # shift intervals, and per-slot fill counts so constraints apply across
+        # both old and new shifts, and regeneration tops up rather than
+        # duplicates already-filled slots.
+        filled_slot_counts: Dict[tuple, int] = {}
         if existing_schedule:
-            self._preload_existing_shifts(schedule["id"], employee_hours, last_shift_end)
+            filled_slot_counts = self._preload_existing_shifts(
+                schedule["id"], employee_hours, employee_shift_intervals
+            )
 
         # Load availability once — { employee_id: { day_of_week: [(start, end), ...] } }
         availability_map = self._load_availability(str(restaurant_id))
 
-        created_shifts = []
+        # Build one flat task per still-needed headcount unit, then sort
+        # hardest-to-staff first (fewest role+availability-eligible candidates)
+        # so a scarce employee gets first claim on the slot only they can
+        # fill, instead of being consumed by an easy slot with many
+        # alternatives. See class docstring for why this isn't a full solver.
+        slot_tasks = []
 
         for template in shift_templates:
             day_of_week = template["day_of_week"]
@@ -185,55 +227,96 @@ class ScheduleGenerator:
                 )
                 continue
 
-            shift_start_dt = datetime.combine(shift_date, start_time)
-            shift_end_dt = datetime.combine(shift_date, end_time)
+            slot_key = (
+                shift_date.isoformat(),
+                start_time.isoformat(),
+                end_time.isoformat(),
+                role,
+            )
+            remaining = max(0, count - filled_slot_counts.get(slot_key, 0))
+            if remaining == 0:
+                continue
+
             duration = self.calculate_duration(start_time, end_time)
+            scarcity = self._scarcity_score(
+                role, day_of_week, start_time, end_time, employees_by_role, availability_map
+            )
 
-            for _ in range(count):
-                available = [
-                    emp for emp in eligible_employees
-                    if self._has_sufficient_rest(last_shift_end[emp["id"]], shift_start_dt)
-                    and not self._would_exceed_hours_cap(
-                        emp, employee_hours[emp["id"]], duration
-                    )
-                    and self._is_available(
-                        emp["id"], day_of_week, start_time, end_time, availability_map
-                    )
-                ]
-
-                if not available:
-                    logger.warning(
-                        "No available employees for role '%s' on %s (rest/cap constraints)",
-                        role,
-                        shift_date,
-                    )
-                    break
-
-                employee = self.select_employee_with_least_hours(available, employee_hours)
-
-                logger.info(
-                    "Assigning %s: selected %s (current hours: %.1f)",
-                    role,
-                    employee.get("name"),
-                    employee_hours[employee["id"]],
+            for _ in range(remaining):
+                slot_tasks.append(
+                    {
+                        "role": role,
+                        "day_of_week": day_of_week,
+                        "shift_date": shift_date,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "duration": duration,
+                        "eligible_employees": eligible_employees,
+                        "scarcity": scarcity,
+                    }
                 )
 
-                shift_data = {
-                    "id": str(uuid4()),
-                    "schedule_id": str(schedule["id"]),
-                    "employee_id": str(employee["id"]),
-                    "shift_date": shift_date.isoformat(),
-                    "start_time": start_time.isoformat(),
-                    "end_time": end_time.isoformat(),
-                    "notes": f"{role}",
-                    "created_at": datetime.utcnow().isoformat(),
-                    "updated_at": datetime.utcnow().isoformat(),
-                }
+        slot_tasks.sort(key=lambda t: (t["scarcity"], t["shift_date"], t["start_time"]))
 
-                created_shifts.append(shift_data)
+        created_shifts = []
 
-                employee_hours[employee["id"]] += duration
-                last_shift_end[employee["id"]] = shift_end_dt
+        for task in slot_tasks:
+            role = task["role"]
+            day_of_week = task["day_of_week"]
+            shift_date = task["shift_date"]
+            start_time = task["start_time"]
+            end_time = task["end_time"]
+            duration = task["duration"]
+
+            shift_start_dt = datetime.combine(shift_date, start_time)
+            shift_end_dt = datetime.combine(shift_date, end_time)
+
+            available = [
+                emp for emp in task["eligible_employees"]
+                if self._has_sufficient_rest(
+                    employee_shift_intervals[emp["id"]], shift_start_dt, shift_end_dt
+                )
+                and not self._would_exceed_hours_cap(
+                    emp, employee_hours[emp["id"]], duration
+                )
+                and self._is_available(
+                    emp["id"], day_of_week, start_time, end_time, availability_map
+                )
+            ]
+
+            if not available:
+                logger.warning(
+                    "No available employees for role '%s' on %s (rest/cap/availability constraints)",
+                    role,
+                    shift_date,
+                )
+                continue
+
+            employee = self.select_employee_with_least_hours(available, employee_hours)
+
+            logger.info(
+                "Assigning %s: selected %s (current hours: %.1f)",
+                role,
+                employee.get("name"),
+                employee_hours[employee["id"]],
+            )
+
+            shift_data = {
+                "id": str(uuid4()),
+                "schedule_id": str(schedule["id"]),
+                "employee_id": str(employee["id"]),
+                "shift_date": shift_date.isoformat(),
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "notes": f"{role}",
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+
+            created_shifts.append(shift_data)
+
+            employee_hours[employee["id"]] += duration
+            employee_shift_intervals[employee["id"]].append((shift_start_dt, shift_end_dt))
 
         if created_shifts:
             self.supabase.table("shifts").insert(created_shifts).execute()
@@ -313,16 +396,50 @@ class ScheduleGenerator:
             for avail_start, avail_end in day_windows
         )
 
+    @classmethod
+    def _scarcity_score(
+        cls,
+        role: str,
+        day_of_week: int,
+        start_time: time,
+        end_time: time,
+        employees_by_role: Dict[str, List[Dict[str, Any]]],
+        availability_map: Dict[str, Dict[int, List[tuple]]],
+    ) -> int:
+        """
+        Static (pre-assignment) count of employees who could plausibly fill a
+        slot: right role and available that day/time. Deliberately ignores
+        rest and hours-cap, since those evolve during assignment and aren't
+        known yet — this is only used to decide processing ORDER (hardest
+        slots first), not final eligibility.
+        """
+        eligible = employees_by_role.get(role, [])
+        return sum(
+            1
+            for emp in eligible
+            if cls._is_available(emp["id"], day_of_week, start_time, end_time, availability_map)
+        )
+
     def _preload_existing_shifts(
         self,
         schedule_id: str,
         employee_hours: Dict[str, float],
-        last_shift_end: Dict[str, Optional[datetime]],
-    ) -> None:
+        employee_shift_intervals: Dict[str, List[Tuple[datetime, datetime]]],
+    ) -> Dict[Tuple[str, str, str, str], int]:
         """
         Load existing shifts for a schedule into the tracking dicts so that
         rest and hours-cap constraints apply correctly when appending new shifts.
+
+        Also returns filled_slot_counts — how many shifts already exist per
+        (shift_date, start_time, end_time, role) slot — so the caller can top
+        up only what's still missing rather than re-creating shifts that
+        already exist. Role is read from the shift's `notes` field (this
+        generator writes notes=role at creation time); if a manager has since
+        edited notes on a shift, that slot's count may be undercounted, which
+        risks a slight over-fill rather than a hard failure.
         """
+        filled_slot_counts: Dict[Tuple[str, str, str, str], int] = defaultdict(int)
+
         response = (
             self.supabase.table("shifts")
             .select("*")
@@ -330,6 +447,10 @@ class ScheduleGenerator:
             .execute()
         )
         for shift in response.data:
+            role = shift.get("notes") or ""
+            slot_key = (shift["shift_date"], shift["start_time"], shift["end_time"], role)
+            filled_slot_counts[slot_key] += 1
+
             emp_id = shift["employee_id"]
             if emp_id not in employee_hours:
                 continue
@@ -338,24 +459,39 @@ class ScheduleGenerator:
             duration = self.calculate_duration(start, end)
             employee_hours[emp_id] = employee_hours.get(emp_id, 0.0) + duration
 
-            shift_end_dt = datetime.combine(
-                date.fromisoformat(shift["shift_date"]), end
-            )
-            current_last = last_shift_end.get(emp_id)
-            if current_last is None or shift_end_dt > current_last:
-                last_shift_end[emp_id] = shift_end_dt
+            shift_date = date.fromisoformat(shift["shift_date"])
+            start_dt = datetime.combine(shift_date, start)
+            end_dt = datetime.combine(shift_date, end)
+            employee_shift_intervals.setdefault(emp_id, []).append((start_dt, end_dt))
 
         logger.info("Preloaded existing shifts for schedule_id=%s", schedule_id)
+        return dict(filled_slot_counts)
 
     @staticmethod
     def _has_sufficient_rest(
-        last_end: Optional[datetime], next_start: datetime
+        existing_intervals: List[Tuple[datetime, datetime]],
+        new_start: datetime,
+        new_end: datetime,
     ) -> bool:
-        """Return True if at least MIN_REST_HOURS have passed since the employee's last shift."""
-        if last_end is None:
-            return True
-        gap_hours = (next_start - last_end).total_seconds() / 3600
-        return gap_hours >= MIN_REST_HOURS
+        """
+        Return True if the new shift has at least MIN_REST_HOURS of rest from
+        every one of the employee's other assigned shifts, on whichever side
+        of it they fall.
+
+        Checking against every interval (not just the chronologically-last
+        one) matters because slots are processed hardest-to-staff first, not
+        strictly in date order — a chronologically-later shift can be
+        assigned before an earlier one for the same employee, and comparing
+        only against "the last one assigned" would compute a nonsensical
+        (negative) gap for an earlier shift that's actually well separated.
+        """
+        for existing_start, existing_end in existing_intervals:
+            gap_after = (new_start - existing_end).total_seconds() / 3600
+            gap_before = (existing_start - new_end).total_seconds() / 3600
+            if gap_after >= MIN_REST_HOURS or gap_before >= MIN_REST_HOURS:
+                continue
+            return False
+        return True
 
     @staticmethod
     def _would_exceed_hours_cap(

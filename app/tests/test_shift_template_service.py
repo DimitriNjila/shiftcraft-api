@@ -119,6 +119,21 @@ def test_upsert_templates_empty_list():
     mock_sb.upsert.assert_called_once()
 
 
+def test_upsert_templates_dedupes_before_saving(sample_shift_templates):
+    """Duplicate templates (e.g. from importing the same file twice) collapse to one entry."""
+    duplicated = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+    ]
+    mock_sb = make_supabase_chain([sample_shift_templates])
+    svc = ShiftTemplateService(mock_sb)
+
+    svc.upsert_templates(RESTAURANT_ID, duplicated)
+
+    payload = mock_sb.upsert.call_args[0][0]
+    assert len(payload["templates"]) == 1
+
+
 def test_upsert_templates_overwrites_previous(sample_shift_templates):
     """Second upsert replaces the first — only one record per restaurant."""
     new_templates = [

@@ -3,6 +3,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from supabase import Client
 from ..core.db import get_supabase
+from ..core.template_utils import dedupe_shift_templates
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,11 @@ class ShiftTemplateService:
 
         One record per restaurant — subsequent calls overwrite the previous set.
 
+        Deduplicates templates sharing (day_of_week, start_time, end_time, role)
+        before saving — see dedupe_shift_templates. Prevents accidental
+        duplication (e.g. importing the same file/photo twice) from silently
+        doubling a shift's headcount need.
+
         Args:
             restaurant_id: Restaurant to save templates for
             templates: List of shift template dicts
@@ -72,6 +78,8 @@ class ShiftTemplateService:
         Returns:
             Saved template record
         """
+        templates = dedupe_shift_templates(templates)
+
         logger.info(
             "Upserting %d shift templates for restaurant_id=%s",
             len(templates),

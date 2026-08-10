@@ -185,32 +185,77 @@ def test_calculate_duration_fractional():
 
 
 # === _has_sufficient_rest ===
+# Signature: _has_sufficient_rest(existing_intervals, new_start, new_end) —
+# checks the new shift against EVERY existing interval (not just the most
+# recent), since slots are no longer necessarily processed in date order.
 
-def test_has_sufficient_rest_no_previous_shift():
-    """No prior shift → always sufficient rest."""
+def test_has_sufficient_rest_no_previous_shifts():
+    """No prior shifts → always sufficient rest."""
     from datetime import datetime
-    assert ScheduleGenerator._has_sufficient_rest(None, datetime(2026, 4, 22, 9, 0)) is True
+    result = ScheduleGenerator._has_sufficient_rest(
+        [], datetime(2026, 4, 22, 9, 0), datetime(2026, 4, 22, 17, 0)
+    )
+    assert result is True
 
 
-def test_has_sufficient_rest_enough_gap():
+def test_has_sufficient_rest_enough_gap_after():
     from datetime import datetime
-    last_end = datetime(2026, 4, 21, 20, 0)  # 8pm
-    next_start = datetime(2026, 4, 22, 9, 0)  # 9am next day → 13h gap
-    assert ScheduleGenerator._has_sufficient_rest(last_end, next_start) is True
+    existing = [(datetime(2026, 4, 21, 12, 0), datetime(2026, 4, 21, 20, 0))]  # ends 8pm
+    result = ScheduleGenerator._has_sufficient_rest(
+        existing, datetime(2026, 4, 22, 9, 0), datetime(2026, 4, 22, 17, 0)  # starts 9am next day → 13h gap
+    )
+    assert result is True
 
 
-def test_has_sufficient_rest_too_short():
+def test_has_sufficient_rest_too_short_after():
     from datetime import datetime
-    last_end = datetime(2026, 4, 22, 22, 0)  # 10pm
-    next_start = datetime(2026, 4, 23, 7, 0)  # 7am next day → 9h gap (< 10h)
-    assert ScheduleGenerator._has_sufficient_rest(last_end, next_start) is False
+    existing = [(datetime(2026, 4, 22, 14, 0), datetime(2026, 4, 22, 22, 0))]  # ends 10pm
+    result = ScheduleGenerator._has_sufficient_rest(
+        existing, datetime(2026, 4, 23, 7, 0), datetime(2026, 4, 23, 15, 0)  # starts 7am next day → 9h gap
+    )
+    assert result is False
 
 
 def test_has_sufficient_rest_exactly_minimum():
     from datetime import datetime
-    last_end = datetime(2026, 4, 21, 23, 0)  # 11pm
-    next_start = datetime(2026, 4, 22, 9, 0)  # 9am → exactly 10h
-    assert ScheduleGenerator._has_sufficient_rest(last_end, next_start) is True
+    existing = [(datetime(2026, 4, 21, 15, 0), datetime(2026, 4, 21, 23, 0))]  # ends 11pm
+    result = ScheduleGenerator._has_sufficient_rest(
+        existing, datetime(2026, 4, 22, 9, 0), datetime(2026, 4, 22, 17, 0)  # starts 9am → exactly 10h
+    )
+    assert result is True
+
+
+def test_has_sufficient_rest_enough_gap_before():
+    """New shift chronologically BEFORE an existing one, with enough gap — must also be respected,
+    since scarcity-first ordering can assign a later shift before an earlier one."""
+    from datetime import datetime
+    existing = [(datetime(2026, 4, 23, 9, 0), datetime(2026, 4, 23, 17, 0))]
+    result = ScheduleGenerator._has_sufficient_rest(
+        existing, datetime(2026, 4, 22, 8, 0), datetime(2026, 4, 22, 12, 0)
+    )
+    assert result is True
+
+
+def test_has_sufficient_rest_too_short_before():
+    from datetime import datetime
+    existing = [(datetime(2026, 4, 23, 9, 0), datetime(2026, 4, 23, 17, 0))]
+    result = ScheduleGenerator._has_sufficient_rest(
+        existing, datetime(2026, 4, 22, 22, 0), datetime(2026, 4, 23, 2, 0)  # ends 2am, only 7h before existing starts
+    )
+    assert result is False
+
+
+def test_has_sufficient_rest_must_satisfy_every_interval():
+    """One conflicting interval among several is enough to reject, even if others are fine."""
+    from datetime import datetime
+    existing = [
+        (datetime(2026, 4, 21, 9, 0), datetime(2026, 4, 21, 17, 0)),   # far enough from the new shift
+        (datetime(2026, 4, 22, 20, 0), datetime(2026, 4, 23, 4, 0)),   # too close to the new shift below
+    ]
+    result = ScheduleGenerator._has_sufficient_rest(
+        existing, datetime(2026, 4, 23, 8, 0), datetime(2026, 4, 23, 16, 0)
+    )
+    assert result is False
 
 
 # === _would_exceed_hours_cap ===
@@ -508,3 +553,138 @@ def test_generate_schedule_partial_window_not_available(sample_schedule, sample_
     result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, tuesday_template)
 
     assert result["total_shifts"] == 0
+
+
+# === generate_schedule: dedup, top-up, coverage-first ordering ===
+
+def test_generate_schedule_duplicate_templates_dont_double_fill(
+    sample_schedule, sample_employee, sample_employee_2
+):
+    """Two identical template entries for the same slot need 1 person, not 2."""
+    duplicate_templates = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+    ]
+    server2 = {**sample_employee_2, "role": "Server"}
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.return_value = MagicMock(data=[])
+
+    gen = _make_generator(mock_sb, sample_schedule, [sample_employee, server2])
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, duplicate_templates)
+
+    assert result["total_shifts"] == 1
+
+
+def test_generate_schedule_regenerate_tops_up_missing_only(
+    sample_schedule, sample_employee, sample_employee_2
+):
+    """
+    Regenerating a week that already has some shifts filled only creates the
+    shifts still missing, not ones that already exist.
+    """
+    templates = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+        {"day_of_week": 3, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Cook", "count": 1},
+    ]
+    existing_server_shift = {
+        "id": "existing-1",
+        "employee_id": EMPLOYEE_ID,
+        "shift_date": "2026-04-22",  # Tuesday — matches the Server template's slot
+        "start_time": "09:00:00",
+        "end_time": "17:00:00",
+        "notes": "Server",
+    }
+    server = sample_employee  # role "Server"
+    cook = {**sample_employee_2, "role": "Cook"}
+
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.side_effect = [
+        MagicMock(data=[existing_server_shift]),  # _preload_existing_shifts
+        MagicMock(data=[]),  # _load_availability
+        MagicMock(data=[]),  # bulk insert response
+    ]
+
+    gen = _make_generator(mock_sb, sample_schedule, [server, cook])
+    gen.schedule_service.get_schedule_by_week.return_value = sample_schedule  # already exists
+
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, templates)
+
+    assert result["total_shifts"] == 1
+    inserted = mock_sb.insert.call_args[0][0][0]
+    assert inserted["notes"] == "Cook"
+
+
+def test_generate_schedule_scarcity_ordering_maximizes_fill(
+    sample_schedule, sample_employee, sample_employee_2
+):
+    """
+    Employee A is capped at 8h; Employee B is uncapped. Two Server shifts:
+    Tuesday 9-17 (8h, both eligible) and Wednesday 9-13 (4h, only A
+    available). Naive input-order processing would greedily tie-break onto A
+    for the easy Tuesday shift first, maxing out A's cap and leaving the
+    Wednesday shift — which only A could cover — unfillable. Scarcity-first
+    ordering processes the scarcer Wednesday shift first, reserving A for it
+    and leaving the flexible B for Tuesday, filling both.
+    """
+    employee_a = {**sample_employee, "max_hours_per_week": 8.0}  # EMPLOYEE_ID
+    employee_b = {**sample_employee_2, "role": "Server"}  # EMPLOYEE_ID_2, no cap
+
+    templates = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "17:00:00", "role": "Server", "count": 1},
+        {"day_of_week": 3, "start_time": "09:00:00", "end_time": "13:00:00", "role": "Server", "count": 1},
+    ]
+
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.return_value = MagicMock(data=[])
+
+    gen = _make_generator(mock_sb, sample_schedule, [employee_a, employee_b])
+    gen._load_availability = MagicMock(return_value={
+        EMPLOYEE_ID_2: {2: [(time(9, 0), time(17, 0))]},  # B only available Tuesday
+    })
+
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, templates)
+
+    assert result["total_shifts"] == 2
+
+
+def test_generate_schedule_rest_check_considers_all_prior_shifts(
+    sample_schedule, sample_employee, sample_employee_2
+):
+    """
+    Scarcity-first ordering can assign a chronologically-LATER shift before
+    an EARLIER one for the same employee. Rest must be checked against every
+    shift already assigned to that employee, not just the most-recently-
+    assigned one — otherwise a well-separated earlier shift gets wrongly
+    rejected because of a "gap" computed against a later shift the wrong way.
+
+    Setup: Tuesday (scarcity 1, only B available) and Wednesday (scarcity 1,
+    only A available) both get processed before Monday (scarcity 2, both
+    "available" by role+availability, though B will be capped out by Tuesday
+    by the time Monday is reached) — so Monday, the chronologically earliest
+    shift, is the LAST one assigned. A must still be recognized as having
+    ample rest for it.
+    """
+    employee_a = sample_employee  # EMPLOYEE_ID, no cap
+    employee_b = {**sample_employee_2, "role": "Server", "max_hours_per_week": 2.0}  # tiny cap
+
+    templates = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "11:00:00", "role": "Server", "count": 1},  # Tue 2h — only B
+        {"day_of_week": 3, "start_time": "09:00:00", "end_time": "13:00:00", "role": "Server", "count": 1},  # Wed 4h — only A
+        {"day_of_week": 1, "start_time": "09:00:00", "end_time": "13:00:00", "role": "Server", "count": 1},  # Mon 4h — both, but B capped out by then
+    ]
+
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.return_value = MagicMock(data=[])
+
+    gen = _make_generator(mock_sb, sample_schedule, [employee_a, employee_b])
+    gen._load_availability = MagicMock(return_value={
+        EMPLOYEE_ID:   {1: [(time(9, 0), time(17, 0))], 3: [(time(9, 0), time(17, 0))]},  # A: Mon, Wed
+        EMPLOYEE_ID_2: {1: [(time(9, 0), time(13, 0))], 2: [(time(9, 0), time(11, 0))]},  # B: Mon, Tue
+    })
+
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, templates)
+
+    # All 3 should fill: Tue -> B, Wed -> A, Mon -> A (B is capped out by then;
+    # a buggy "last shift only" rest check would wrongly reject A for Monday
+    # since it was assigned after the chronologically-later Wednesday shift).
+    assert result["total_shifts"] == 3
