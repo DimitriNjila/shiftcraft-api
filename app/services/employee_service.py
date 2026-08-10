@@ -18,6 +18,24 @@ class EmployeeNotFoundError(Exception):
         super().__init__(f"Employee with ID {employee_id} not found")
 
 
+class EmployeeHasShiftsError(Exception):
+    """
+    Raised when attempting to permanently delete an employee who still has
+    shift history. Hard-deleting them would orphan those shift rows (the
+    schedule view joins shifts -> employees and expects a match). Deactivate
+    is the safe default for anyone who's ever worked a shift; hard delete is
+    for true mistakes (duplicate entries, employees added but never scheduled).
+    """
+
+    def __init__(self, employee_id: UUID):
+        self.employee_id = employee_id
+        super().__init__(
+            f"Cannot permanently delete employee {employee_id}: they still have "
+            "shift history. Deactivate the employee instead, or remove their "
+            "shifts first."
+        )
+
+
 class EmployeeService:
     """Service for managing restaurant employees"""
 
@@ -210,7 +228,14 @@ class EmployeeService:
 
     def delete_employee(self, employee_id: UUID) -> Dict[str, Any]:
         """
-        Delete an employee (hard delete).
+        Permanently delete an employee (hard delete).
+
+        Blocked if the employee has any shift history — see
+        EmployeeHasShiftsError. Use deactivate_employee (soft delete) for
+        anyone who's actually worked; this is for cleaning up mistakes.
+
+        Also deletes the employee's availability windows first, since those
+        carry no historical value once the employee record is gone.
 
         Args:
             employee_id: UUID of the employee to delete
@@ -220,11 +245,29 @@ class EmployeeService:
 
         Raises:
             EmployeeNotFoundError: If the employee does not exist
+            EmployeeHasShiftsError: If the employee has any shift history
         """
-        # Check if employee exists first
         existing = self.get_employee_by_id(employee_id)
         if not existing:
             raise EmployeeNotFoundError(employee_id)
+
+        shifts_response = (
+            self.supabase.table("shifts")
+            .select("id")
+            .eq("employee_id", str(employee_id))
+            .limit(1)
+            .execute()
+        )
+        if shifts_response.data:
+            logger.warning(
+                "Delete blocked: employee id=%s still has shift history", employee_id
+            )
+            raise EmployeeHasShiftsError(employee_id)
+
+        logger.info("Deleting availability windows for employee id=%s", employee_id)
+        self.supabase.table("employee_availability").delete().eq(
+            "employee_id", str(employee_id)
+        ).execute()
 
         logger.info("Deleting employee id=%s", employee_id)
         response = (

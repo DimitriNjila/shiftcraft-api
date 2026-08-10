@@ -61,3 +61,29 @@ class GenerateScheduleRequest(BaseModel):
     week_start: date = Field(..., description="Monday of the week to schedule")
     restaurant_id: str
     shift_templates: Optional[List[ShiftTemplate]] = None
+
+
+class ShareLinkResponse(BaseModel):
+    """Response after generating or revoking a schedule share link."""
+
+    share_token: str
+    share_enabled: bool
+    share_expires_at: Optional[datetime] = None
+
+
+class PublicShiftModel(BaseModel):
+    """Minimal shift shape exposed on the public share endpoint."""
+
+    employee_name: str
+    role: str
+    shift_date: date
+    start_time: time
+    end_time: time
+
+
+class PublicScheduleResponse(BaseModel):
+    """Minimal schedule shape exposed on the public share endpoint — no internal IDs."""
+
+    restaurant_name: str
+    week_start: date
+    shifts: List[PublicShiftModel]

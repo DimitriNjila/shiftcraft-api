@@ -5,9 +5,10 @@ from ...models.schedule_model import (
     ScheduleModel,
     ScheduleCreate,
     ScheduleResponse,
+    ShareLinkResponse,
 )
 from datetime import date
-from ...services.schedule_service import schedule_service
+from ...services.schedule_service import schedule_service, ScheduleNotFoundError
 from ...services.schedule_generator_service import schedule_generator
 from ...core.auth import get_current_user
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -91,4 +92,39 @@ def generate_schedule(request: GenerateScheduleRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate schedule: {str(e)}",
+        )
+
+
+@schedule_router.post("/{schedule_id}/share", response_model=ShareLinkResponse)
+def create_share_link(schedule_id: UUID):
+    try:
+        schedule = schedule_service.generate_share_link(schedule_id)
+        return schedule
+    except ScheduleNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Schedule {schedule_id} not found",
+        )
+    except Exception as e:
+        logger.exception("POST /schedules/%s/share failed: %s", schedule_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again later.",
+        )
+
+
+@schedule_router.delete("/{schedule_id}/share", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_share_link(schedule_id: UUID):
+    try:
+        schedule_service.revoke_share_link(schedule_id)
+    except ScheduleNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Schedule {schedule_id} not found",
+        )
+    except Exception as e:
+        logger.exception("DELETE /schedules/%s/share failed: %s", schedule_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again later.",
         )

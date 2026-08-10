@@ -64,7 +64,18 @@ PostgreSQL (via Supabase)
 
 **Schedule Generator (`schedule_generator_service.py`):**
 - Generates a full week of shifts in under 1 second via bulk insert
-- Fair distribution: assigns shifts to the employee with the fewest hours so far
+- Priority order: coverage first, fairness second. Fills every shift template if any feasible
+  assignment exists — a template is only left unfilled when every eligible employee would breach
+  a hard constraint (hours cap, rest window, availability). Fairness (fewest hours so far) is the
+  tiebreak among employees who are all feasible for a slot, not a reason to leave it empty.
+- Slots are processed hardest-to-staff first (fewest role+availability-eligible candidates) so a
+  scarce employee isn't consumed by an easy slot before a harder one only they can fill. This is
+  a heuristic (provably optimal fill is NP-hard here), not a 100% guarantee.
+- Re-running generation for a week that already has shifts tops up only the slots still missing
+  (`_preload_existing_shifts` returns per-slot fill counts) — it does not duplicate shifts.
+- Shift templates are deduplicated by (day_of_week, start_time, end_time, role) — both on save
+  (`shift_template_service.upsert_templates`) and defensively again inside the generator — via
+  `app/core/template_utils.dedupe_shift_templates`.
 - Filters by role (Server, Cook, Manager) and active status
 - Uses shift templates from `constants.py` which define day, times, role, and required headcount
 
@@ -83,4 +94,4 @@ PostgreSQL (via Supabase)
 - Times stored as `HH:MM:SS` strings
 - Dates stored as ISO format strings
 - UUIDs are converted to strings for Supabase operations
-- Employee deletion is a soft delete (sets `is_active=False`), not a hard delete
+- Employee deletion is split in two: `POST /employees/{id}/deactivate` soft-deletes (`is_active=False`) — this is the "Disable" action and the safe default for anyone who's worked a shift. `DELETE /employees/{id}` hard-deletes and is blocked with `409` if the employee has any shift history (`EmployeeHasShiftsError`); it does clean up the employee's `employee_availability` rows first, since those have no historical value.

@@ -278,6 +278,104 @@ def test_validate_analysis_shape_fails_patterns_not_list():
 
 # === get_ai_service singleton ===
 
+# === analyze_image_for_templates ===
+
+
+def test_analyze_image_returns_shifts_list():
+    import json
+    svc = _make_ai_service()
+    _mock_groq_response(
+        svc,
+        json.dumps(
+            {
+                "shifts": [
+                    {"day_of_week": 2, "start_time": "09:00", "end_time": "17:00", "role": "Server", "count": 1},
+                ]
+            }
+        ),
+    )
+
+    result = svc.analyze_image_for_templates(b"fake-image-bytes", "image/png")
+
+    assert isinstance(result, list)
+    assert result[0]["role"] == "Server"
+
+
+def test_analyze_image_accepts_bare_list_response():
+    """Some models may ignore the {"shifts": [...]} wrapper — handle a bare list too."""
+    import json
+    svc = _make_ai_service()
+    _mock_groq_response(
+        svc,
+        json.dumps([{"day_of_week": 3, "start_time": "11:00", "end_time": "20:00", "role": "Cook", "count": 2}]),
+    )
+
+    result = svc.analyze_image_for_templates(b"fake-image-bytes", "image/png")
+
+    assert len(result) == 1
+    assert result[0]["role"] == "Cook"
+
+
+def test_analyze_image_flags_uncertain_fields_as_null():
+    import json
+    svc = _make_ai_service()
+    _mock_groq_response(
+        svc,
+        json.dumps({"shifts": [{"day_of_week": 2, "start_time": None, "end_time": None, "role": "Server", "count": None}]}),
+    )
+
+    result = svc.analyze_image_for_templates(b"fake-image-bytes", "image/png")
+
+    assert result[0]["start_time"] is None
+    assert result[0]["count"] is None
+
+
+def test_analyze_image_raises_on_invalid_json():
+    svc = _make_ai_service()
+    _mock_groq_response(svc, "not json")
+
+    with pytest.raises(ValueError, match="malformed JSON"):
+        svc.analyze_image_for_templates(b"fake-image-bytes", "image/png")
+
+
+def test_analyze_image_raises_when_shifts_key_missing():
+    import json
+    svc = _make_ai_service()
+    _mock_groq_response(svc, json.dumps({"summary": "no shifts key here"}))
+
+    with pytest.raises(ValueError, match="shifts"):
+        svc.analyze_image_for_templates(b"fake-image-bytes", "image/png")
+
+
+def test_analyze_image_uses_configured_vision_model():
+    import json
+    svc = _make_ai_service()
+    svc._client.chat.completions.create = MagicMock()
+    _mock_groq_response(svc, json.dumps({"shifts": []}))
+
+    from app.services import ai_service as ai_module
+    with patch.object(ai_module.settings, "GROQ_VISION_MODEL", "test-vision-model"):
+        svc.analyze_image_for_templates(b"fake-image-bytes", "image/jpeg")
+
+    call_kwargs = svc._client.chat.completions.create.call_args[1]
+    assert call_kwargs["model"] == "test-vision-model"
+
+
+def test_analyze_image_embeds_base64_data_uri():
+    import base64
+    import json
+    svc = _make_ai_service()
+    _mock_groq_response(svc, json.dumps({"shifts": []}))
+
+    svc.analyze_image_for_templates(b"fake-image-bytes", "image/png")
+
+    call_kwargs = svc._client.chat.completions.create.call_args[1]
+    user_message = next(m for m in call_kwargs["messages"] if m["role"] == "user")
+    image_part = next(p for p in user_message["content"] if p["type"] == "image_url")
+    expected_b64 = base64.b64encode(b"fake-image-bytes").decode("utf-8")
+    assert image_part["image_url"]["url"] == f"data:image/png;base64,{expected_b64}"
+
+
 def test_get_ai_service_returns_same_instance():
     """get_ai_service() must return the same object on repeated calls."""
     import app.services.ai_service as ai_module

@@ -4,7 +4,9 @@ import sentry_sdk
 from fastapi import HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing import Optional
+from uuid import UUID
 from .db import get_supabase
+from ..services.schedule_service import schedule_service
 
 logger = logging.getLogger(__name__)
 
@@ -58,3 +60,37 @@ def get_current_user(
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def get_current_user_or_share_token(
+    schedule_id: UUID,
+    token: Optional[str] = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security),
+):
+    """
+    FastAPI dependency for schedule sub-resources (e.g. iCal export) that must
+    work both for an authenticated manager and for an employee following a
+    share link with no account of their own.
+
+    Tries JWT auth first (same validation as get_current_user); falls back to
+    checking `token` (query param) against the given schedule's active,
+    unexpired share link.
+
+    Usage:
+        @router.get("/{schedule_id}/export/ical")
+        def export(schedule_id: UUID, _=Depends(get_current_user_or_share_token)):
+
+    Raises:
+        401 if neither a valid JWT nor a valid share token is presented.
+    """
+    if credentials:
+        return get_current_user(credentials)
+
+    if token and schedule_service.is_valid_share_token(schedule_id, token):
+        return None
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required: provide a Bearer token or a valid ?token= share link",
+        headers={"WWW-Authenticate": "Bearer"},
+    )

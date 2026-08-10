@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
-from datetime import date
+from datetime import date, datetime, timedelta
 from uuid import UUID
 
 from app.services.schedule_service import (
@@ -223,3 +223,186 @@ def test_delete_schedule_not_found():
     svc = ScheduleService(mock_sb)
     with pytest.raises(ScheduleNotFoundError):
         svc.delete_schedule(UUID(SCHEDULE_ID))
+
+
+# === generate_share_link ===
+
+
+def test_generate_share_link_success(sample_schedule):
+    shared = {**sample_schedule, "share_token": "abc123", "share_enabled": True}
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.side_effect = [
+        MagicMock(data=[sample_schedule]),  # get_schedule_by_id
+        MagicMock(data=[shared]),  # update
+    ]
+    svc = ScheduleService(mock_sb)
+    result = svc.generate_share_link(UUID(SCHEDULE_ID))
+    assert result["share_token"] == "abc123"
+    assert result["share_enabled"] is True
+    mock_sb.update.assert_called_once()
+
+
+def test_generate_share_link_not_found():
+    mock_sb = make_supabase_chain([])
+    svc = ScheduleService(mock_sb)
+    with pytest.raises(ScheduleNotFoundError):
+        svc.generate_share_link(UUID(SCHEDULE_ID))
+
+
+# === revoke_share_link ===
+
+
+def test_revoke_share_link_success(sample_schedule):
+    revoked = {**sample_schedule, "share_token": "abc123", "share_enabled": False}
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.side_effect = [
+        MagicMock(data=[sample_schedule]),  # get_schedule_by_id
+        MagicMock(data=[revoked]),  # update
+    ]
+    svc = ScheduleService(mock_sb)
+    result = svc.revoke_share_link(UUID(SCHEDULE_ID))
+    assert result["share_enabled"] is False
+    mock_sb.update.assert_called_once_with({"share_enabled": False})
+
+
+def test_revoke_share_link_not_found():
+    mock_sb = make_supabase_chain([])
+    svc = ScheduleService(mock_sb)
+    with pytest.raises(ScheduleNotFoundError):
+        svc.revoke_share_link(UUID(SCHEDULE_ID))
+
+
+# === get_schedule_by_share_token ===
+
+
+def test_get_schedule_by_share_token_success(sample_schedule):
+    future = (datetime.utcnow() + timedelta(days=1)).isoformat()
+    shared_schedule = {
+        **sample_schedule,
+        "share_token": "abc123",
+        "share_enabled": True,
+        "share_expires_at": future,
+    }
+    shift = {
+        "id": "aaaa",
+        "start_time": "09:00:00",
+        "end_time": "17:00:00",
+        "shift_date": "2026-04-22",
+        "employee": {"name": "Alice", "role": "Server"},
+    }
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.side_effect = [
+        MagicMock(data=[shared_schedule]),  # share_token lookup
+        MagicMock(data=[shift]),  # shifts query
+        MagicMock(data=[{"name": "Bellagios"}]),  # restaurants lookup
+    ]
+    svc = ScheduleService(mock_sb)
+    result = svc.get_schedule_by_share_token("abc123")
+    assert result["restaurant_name"] == "Bellagios"
+    assert result["week_start"] == sample_schedule["week_start"]
+    assert len(result["shifts"]) == 1
+    assert result["shifts"][0]["employee_name"] == "Alice"
+    assert "id" not in result["shifts"][0]
+
+
+def test_get_schedule_by_share_token_unknown_token():
+    mock_sb = make_supabase_chain([])
+    svc = ScheduleService(mock_sb)
+    result = svc.get_schedule_by_share_token("nonexistent")
+    assert result is None
+
+
+def test_get_schedule_by_share_token_expired(sample_schedule):
+    past = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    shared_schedule = {
+        **sample_schedule,
+        "share_token": "abc123",
+        "share_enabled": True,
+        "share_expires_at": past,
+    }
+    mock_sb = make_supabase_chain([shared_schedule])
+    svc = ScheduleService(mock_sb)
+    result = svc.get_schedule_by_share_token("abc123")
+    assert result is None
+
+
+# === is_valid_share_token ===
+
+
+def test_is_valid_share_token_valid(sample_schedule):
+    future = (datetime.utcnow() + timedelta(days=1)).isoformat()
+    shared = {
+        **sample_schedule,
+        "share_token": "abc123",
+        "share_enabled": True,
+        "share_expires_at": future,
+    }
+    mock_sb = make_supabase_chain([shared])
+    svc = ScheduleService(mock_sb)
+    assert svc.is_valid_share_token(UUID(SCHEDULE_ID), "abc123") is True
+
+
+def test_is_valid_share_token_wrong_token(sample_schedule):
+    future = (datetime.utcnow() + timedelta(days=1)).isoformat()
+    shared = {
+        **sample_schedule,
+        "share_token": "abc123",
+        "share_enabled": True,
+        "share_expires_at": future,
+    }
+    mock_sb = make_supabase_chain([shared])
+    svc = ScheduleService(mock_sb)
+    assert svc.is_valid_share_token(UUID(SCHEDULE_ID), "wrong-token") is False
+
+
+def test_is_valid_share_token_disabled(sample_schedule):
+    future = (datetime.utcnow() + timedelta(days=1)).isoformat()
+    shared = {
+        **sample_schedule,
+        "share_token": "abc123",
+        "share_enabled": False,
+        "share_expires_at": future,
+    }
+    mock_sb = make_supabase_chain([shared])
+    svc = ScheduleService(mock_sb)
+    assert svc.is_valid_share_token(UUID(SCHEDULE_ID), "abc123") is False
+
+
+def test_is_valid_share_token_expired(sample_schedule):
+    past = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    shared = {
+        **sample_schedule,
+        "share_token": "abc123",
+        "share_enabled": True,
+        "share_expires_at": past,
+    }
+    mock_sb = make_supabase_chain([shared])
+    svc = ScheduleService(mock_sb)
+    assert svc.is_valid_share_token(UUID(SCHEDULE_ID), "abc123") is False
+
+
+def test_is_valid_share_token_schedule_not_found():
+    mock_sb = make_supabase_chain([])
+    svc = ScheduleService(mock_sb)
+    assert svc.is_valid_share_token(UUID(SCHEDULE_ID), "abc123") is False
+
+
+def test_is_valid_share_token_no_token(sample_schedule):
+    mock_sb = make_supabase_chain([sample_schedule])
+    svc = ScheduleService(mock_sb)
+    assert svc.is_valid_share_token(UUID(SCHEDULE_ID), "") is False
+
+
+# === get_restaurant_name ===
+
+
+def test_get_restaurant_name_found():
+    mock_sb = make_supabase_chain([{"name": "Bellagios"}])
+    svc = ScheduleService(mock_sb)
+    assert svc.get_restaurant_name(RESTAURANT_ID) == "Bellagios"
+
+
+def test_get_restaurant_name_not_found():
+    mock_sb = make_supabase_chain([])
+    svc = ScheduleService(mock_sb)
+    assert svc.get_restaurant_name(RESTAURANT_ID) == RESTAURANT_ID

@@ -2,7 +2,11 @@ import logging
 
 from ...models.employee_model import EmployeeCreate, EmployeeModel, EmployeeUpdate
 from ...models.availability_model import AvailabilityCreate, AvailabilityModel
-from ...services.employee_service import employee_service, EmployeeNotFoundError
+from ...services.employee_service import (
+    employee_service,
+    EmployeeHasShiftsError,
+    EmployeeNotFoundError,
+)
 from ...services.availability_service import (
     availability_service,
     AvailabilityConflictError,
@@ -93,16 +97,36 @@ def update_employee(employee_id: UUID, employee: EmployeeUpdate):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@employee_router.post("/{employee_id}/deactivate", response_model=EmployeeModel)
+def deactivate_employee(employee_id: UUID):
+    """Disable an employee (soft delete: is_active=False). Reversible via PATCH."""
+    try:
+        return employee_service.deactivate_employee(employee_id)
+    except EmployeeNotFoundError:
+        logger.warning("Deactivate employee failed: employee %s not found", employee_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Employee with ID {employee_id} not found",
+        )
+
+
 @employee_router.delete("/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_employee(employee_id: UUID):
+    """
+    Permanently delete an employee. Blocked (409) if they have any shift
+    history — deactivate instead for anyone who's actually worked a shift.
+    """
     try:
-        employee_service.deactivate_employee(employee_id)
+        employee_service.delete_employee(employee_id)
     except EmployeeNotFoundError:
         logger.warning("Delete employee failed: employee %s not found", employee_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Employee with ID {employee_id} not found",
         )
+    except EmployeeHasShiftsError as e:
+        logger.warning("Delete employee blocked: %s", e)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
 # --- Availability ---
