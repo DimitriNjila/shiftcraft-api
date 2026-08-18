@@ -121,7 +121,8 @@ def test_analyze_schedule_calls_correct_model():
     svc.analyze_schedule(SAMPLE_SCHEDULE, SAMPLE_SHIFTS)
 
     call_kwargs = svc._client.chat.completions.create.call_args[1]
-    assert call_kwargs["model"] == "llama-3.3-70b-versatile"
+    from app.core.config import settings
+    assert call_kwargs["model"] == settings.GROQ_TEXT_MODEL
 
 
 def test_analyze_schedule_requests_json_output():

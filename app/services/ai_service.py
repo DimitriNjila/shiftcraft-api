@@ -10,8 +10,6 @@ from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
-MODEL = "llama-3.3-70b-versatile"
-
 _VISION_SYSTEM_PROMPT = """You are extracting a restaurant shift schedule from an image — a photo or screenshot of a handwritten or printed schedule table. Most schedules like this (whiteboards especially) show employee NAMES, not job roles — that's expected, not a gap.
 
 Return ONLY valid JSON matching this exact schema — no markdown, no extra text:
@@ -120,7 +118,7 @@ class AIService:
         prompt = self._build_analysis_prompt(schedule, shifts, all_employees or [])
 
         response = self._client.chat.completions.create(
-            model=MODEL,
+            model=settings.GROQ_TEXT_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},

@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # meta-llama/llama-4-scout-17b-16e-instruct was shut down by Groq on
     # 2026-07-17; qwen/qwen3.6-27b is their documented vision replacement.
     GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
+    # Text-only Groq model for schedule analysis. Was llama-3.3-70b-versatile
+    # until Groq discontinued it; gpt-oss-120b is the current, larger open
+    # replacement and honours response_format=json_object cleanly.
+    # Env-overridable so a future retirement is one .env line, not a deploy.
+    GROQ_TEXT_MODEL: str = "openai/gpt-oss-120b"
 
     # Observability
     SENTRY_DSN: Optional[str] = None
