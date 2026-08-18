@@ -12,6 +12,7 @@ from .middleware import RequestLoggingMiddleware, configure_json_logging
 from .routes import (
     employee_router,
     public_router,
+    restaurant_router,
     schedule_export_router,
     schedule_router,
     shift_router,
@@ -110,6 +111,7 @@ app.include_router(schedule_router.schedule_router)
 app.include_router(schedule_export_router.schedule_export_router)
 app.include_router(shift_router.shifts_router)
 app.include_router(shift_template_router.shift_template_router)
+app.include_router(restaurant_router.restaurant_router)
 app.include_router(public_router.public_router)
 app.include_router(ai_router)
 

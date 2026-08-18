@@ -5,6 +5,8 @@ from uuid import UUID
 from supabase import Client
 from typing import List, Optional, Dict, Any
 
+from .restaurant_service import RestaurantService
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,8 +41,13 @@ class EmployeeHasShiftsError(Exception):
 class EmployeeService:
     """Service for managing restaurant employees"""
 
-    def __init__(self, supabase_client: Optional[Client] = None):
+    def __init__(
+        self,
+        supabase_client: Optional[Client] = None,
+        restaurant_service: Optional[RestaurantService] = None,
+    ):
         self._supabase = supabase_client
+        self._restaurant_service = restaurant_service
         self.table_name = "employees"
 
     @property
@@ -48,6 +55,12 @@ class EmployeeService:
         if self._supabase is None:
             self._supabase = get_supabase()
         return self._supabase
+
+    @property
+    def restaurant_service(self) -> RestaurantService:
+        if self._restaurant_service is None:
+            self._restaurant_service = RestaurantService(self.supabase)
+        return self._restaurant_service
 
     def get_employees(
         self, restaurant_id: Optional[str] = None, is_active: Optional[bool] = None
@@ -136,6 +149,10 @@ class EmployeeService:
         if not restaurant_id:
             raise ValueError("Restaurant ID is required")
 
+        # Role must be one the owner defined for this restaurant. Raises
+        # ValueError with the valid list, which the router converts to 400.
+        self.restaurant_service.validate_role(restaurant_id, role)
+
         logger.info(
             "Creating employee name=%s role=%s restaurant_id=%s",
             name.strip(),
@@ -198,6 +215,11 @@ class EmployeeService:
         if name is not None:
             update_data["name"] = name
         if role is not None:
+            # Validate against the employee's restaurant, not any
+            # restaurant_id from the request (there isn't one on update).
+            self.restaurant_service.validate_role(
+                str(existing["restaurant_id"]), role
+            )
             update_data["role"] = role
         if is_active is not None:
             update_data["is_active"] = is_active

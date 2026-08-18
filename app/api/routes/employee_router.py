@@ -2,6 +2,7 @@ import logging
 
 from ...models.employee_model import EmployeeCreate, EmployeeModel, EmployeeUpdate
 from ...models.availability_model import AvailabilityCreate, AvailabilityModel
+from ...models.time_off_model import TimeOffCreate, TimeOffModel
 from ...services.employee_service import (
     employee_service,
     EmployeeHasShiftsError,
@@ -11,6 +12,10 @@ from ...services.availability_service import (
     availability_service,
     AvailabilityConflictError,
     AvailabilityNotFoundError,
+)
+from ...services.time_off_service import (
+    time_off_service,
+    TimeOffNotFoundError,
 )
 from ...core.auth import get_current_user
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -184,4 +189,65 @@ def delete_employee_availability(employee_id: UUID, availability_id: UUID):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Availability window {availability_id} not found",
+        )
+
+
+# --- Time off ---
+
+
+@employee_router.get(
+    "/{employee_id}/time-off",
+    response_model=list[TimeOffModel],
+)
+def list_employee_time_off(employee_id: UUID):
+    """List all time-off entries for an employee, most recent first."""
+    employee = employee_service.get_employee_by_id(employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Employee with ID {employee_id} not found",
+        )
+    return time_off_service.list_for_employee(employee_id)
+
+
+@employee_router.post(
+    "/{employee_id}/time-off",
+    response_model=TimeOffModel,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_employee_time_off(employee_id: UUID, body: TimeOffCreate):
+    """
+    Record a time-off entry for an employee. Overlapping shifts already
+    generated for the affected dates are NOT auto-removed — the owner
+    should regenerate the schedule after adding time off, and the generator
+    will skip the employee for any newly-generated slots on those dates.
+    """
+    try:
+        return time_off_service.add(
+            employee_id=employee_id,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            reason=body.reason,
+        )
+    except EmployeeNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Employee with ID {employee_id} not found",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@employee_router.delete(
+    "/{employee_id}/time-off/{time_off_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_employee_time_off(employee_id: UUID, time_off_id: UUID):
+    """Remove a time-off entry."""
+    try:
+        time_off_service.delete(employee_id, time_off_id)
+    except TimeOffNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Time-off entry {time_off_id} not found",
         )

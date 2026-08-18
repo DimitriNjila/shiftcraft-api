@@ -58,6 +58,39 @@ def test_generate_schedule_no_employees(sample_schedule):
         gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, SIMPLE_TEMPLATES)
 
 
+def test_generate_schedule_skips_employees_on_time_off(
+    sample_schedule, sample_employee, sample_employee_2
+):
+    """
+    Employee on time-off for the shift date is excluded from the candidate
+    pool for slots on that date, even if they'd otherwise be the fair pick.
+    """
+    # Two identical Server slots on Tue (2026-04-22). Alice is on time-off
+    # that day; Bob (a Cook) has the wrong role. Result: no shifts assigned.
+    server_only = [
+        {"day_of_week": 2, "start_time": "09:00:00", "end_time": "13:00:00", "role": "Server", "count": 1},
+    ]
+    mock_sb = make_supabase_chain()
+    mock_sb.execute.side_effect = [
+        MagicMock(data=[]),  # _load_availability
+        MagicMock(
+            data=[
+                {
+                    "employee_id": EMPLOYEE_ID,  # Alice, the only Server
+                    "start_date": "2026-04-22",
+                    "end_date": "2026-04-22",
+                }
+            ]
+        ),  # _load_time_off
+        MagicMock(data=[]),  # (no insert — nothing to schedule)
+    ]
+
+    gen = _make_generator(mock_sb, sample_schedule, [sample_employee, sample_employee_2])
+    result = gen.generate_schedule(UUID(RESTAURANT_ID), WEEK_START, server_only)
+
+    assert result["total_shifts"] == 0
+
+
 def test_generate_schedule_uses_existing_schedule(sample_schedule, sample_employee):
     """When a schedule already exists for the week, it is reused and create_schedule is not called."""
     mock_sb = make_supabase_chain()
@@ -601,6 +634,7 @@ def test_generate_schedule_regenerate_tops_up_missing_only(
     mock_sb.execute.side_effect = [
         MagicMock(data=[existing_server_shift]),  # _preload_existing_shifts
         MagicMock(data=[]),  # _load_availability
+        MagicMock(data=[]),  # _load_time_off (overlap query)
         MagicMock(data=[]),  # bulk insert response
     ]
 

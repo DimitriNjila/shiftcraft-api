@@ -198,6 +198,14 @@ class ScheduleGenerator:
         # Load availability once — { employee_id: { day_of_week: [(start, end), ...] } }
         availability_map = self._load_availability(str(restaurant_id))
 
+        # Load time-off for the whole week in one query — { employee_id: set(date) }.
+        # Treated as hard-unavailable: overlap with a shift_date removes the
+        # employee from that slot's candidate pool, same as a missing
+        # availability window would.
+        time_off_dates = self._load_time_off(
+            str(restaurant_id), week_start, week_start + timedelta(days=6)
+        )
+
         # Build one flat task per still-needed headcount unit, then sort
         # hardest-to-staff first (fewest role+availability-eligible candidates)
         # so a scarce employee gets first claim on the slot only they can
@@ -273,7 +281,8 @@ class ScheduleGenerator:
 
             available = [
                 emp for emp in task["eligible_employees"]
-                if self._has_sufficient_rest(
+                if shift_date not in time_off_dates.get(emp["id"], set())
+                and self._has_sufficient_rest(
                     employee_shift_intervals[emp["id"]], shift_start_dt, shift_end_dt
                 )
                 and not self._would_exceed_hours_cap(
@@ -330,6 +339,48 @@ class ScheduleGenerator:
             "total_shifts": len(created_shifts),
             "status": "Completed",
         }
+
+    def _load_time_off(
+        self, restaurant_id: str, week_start: date, week_end: date
+    ) -> Dict[str, set]:
+        """
+        Return { employee_id: set(date) } — every date in the given week
+        that is covered by at least one time-off row for the restaurant.
+
+        We expand ranges to a set of dates once here rather than doing an
+        overlap check per (employee, slot) — the generator processes many
+        slots per employee, so expanding once is cheaper. Weeks are 7 days,
+        so the sets stay tiny.
+        """
+        # Local import avoids a circular dependency (time_off_service imports
+        # employee_service, which the generator already touches at import).
+        from .time_off_service import TimeOffService
+
+        service = TimeOffService(self.supabase)
+        rows = service.list_overlapping(restaurant_id, week_start, week_end)
+
+        result: Dict[str, set] = {}
+        for row in rows:
+            emp_id = row["employee_id"]
+            row_start = date.fromisoformat(row["start_date"])
+            row_end = date.fromisoformat(row["end_date"])
+            # Clamp the time-off range to the week window before expanding.
+            span_start = max(row_start, week_start)
+            span_end = min(row_end, week_end)
+            dates = result.setdefault(emp_id, set())
+            cursor = span_start
+            while cursor <= span_end:
+                dates.add(cursor)
+                cursor += timedelta(days=1)
+
+        if result:
+            logger.info(
+                "Loaded time-off for %d employees in week %s..%s",
+                len(result),
+                week_start,
+                week_end,
+            )
+        return result
 
     def _load_availability(
         self, restaurant_id: str

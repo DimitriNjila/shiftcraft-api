@@ -31,7 +31,12 @@ pillow_heif.register_heif_opener()
 # trustworthy enough to gate on alone. So every uploaded image is decoded
 # and re-encoded as JPEG before it reaches the model, regardless of what the
 # client claimed it was.
-_MAX_IMAGE_DIMENSION = 2048  # iPhone photos are often 4000px+; no need to ship that much detail
+# Groq's vision endpoint bills images by resolution — a 2048px image can cost
+# ~11k image tokens on qwen3.6-27b, which pushes a full-week schedule past the
+# per-request TPM cap once the JSON output budget is added. 1280px keeps
+# handwritten and printed schedule text easily legible for OCR while cutting
+# the image-token cost by ~2.5x.
+_MAX_IMAGE_DIMENSION = 1280
 
 # Best-guess header -> normalized field mapping. Matched against a lowercased,
 # whitespace/punctuation-stripped version of each source column header.
@@ -226,7 +231,7 @@ class TemplateImportService:
             image.thumbnail((_MAX_IMAGE_DIMENSION, _MAX_IMAGE_DIMENSION), Image.LANCZOS)
 
         buf = io.BytesIO()
-        image.save(buf, format="JPEG", quality=90)
+        image.save(buf, format="JPEG", quality=82, optimize=True)
         return buf.getvalue()
 
     # === Validation ===

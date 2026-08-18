@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import groq
@@ -174,6 +175,14 @@ class AIService:
 
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
 
+        # NOTE: response_format={"type": "json_object"} is deliberately NOT set
+        # here. On Groq's vision model, combining json_object mode with image
+        # inputs intermittently returns an empty completion, which Groq then
+        # rejects server-side as `json_validate_failed` with empty
+        # `failed_generation` — surfacing as a 400 to us and a 502 to the
+        # client. The system prompt already demands strict JSON; we strip any
+        # accidental markdown fence and parse manually below, which is
+        # strictly more forgiving.
         response = self._client.chat.completions.create(
             model=settings.GROQ_VISION_MODEL,
             messages=[
@@ -183,7 +192,16 @@ class AIService:
                     "content": [
                         {
                             "type": "text",
-                            "text": "Extract every shift you can identify from this schedule image.",
+                            # /no_think is a qwen3 chat-template directive that
+                            # suppresses the internal <think>…</think> reasoning
+                            # trace. On ambiguous whiteboard photos the model
+                            # was burning its entire output budget re-examining
+                            # regions inside <think> and never emitting JSON;
+                            # skipping reasoning routes the full max_tokens
+                            # budget straight into the answer. Safe on
+                            # non-reasoning models — they treat it as literal
+                            # text and ignore it.
+                            "text": "Extract every shift you can identify from this schedule image. Respond with JSON only, no prose. /no_think",
                         },
                         {
                             "type": "image_url",
@@ -192,17 +210,41 @@ class AIService:
                     ],
                 },
             ],
-            response_format={"type": "json_object"},
             temperature=0.1,  # low temp — this is extraction, not generation
-            max_tokens=2048,
+            # Groq counts max_tokens against the per-minute TPM cap upfront,
+            # so this can't just be "generous". Free-tier TPM on qwen3.6-27b
+            # is 8000; a downscaled schedule image runs ~2500-3000 input
+            # tokens, so 4096 output leaves us at ~7k total — inside the cap
+            # while still fitting ~60 shifts of JSON. If a restaurant hits
+            # this ceiling in practice, the right fix is Groq Dev Tier
+            # (much higher TPM), not shrinking output further.
+            max_tokens=4096,
+            # Belt-and-suspenders reasoning suppression alongside the
+            # /no_think directive in the user message. Groq silently drops
+            # unknown params, so this is safe if the field name changes;
+            # extra_body dodges any SDK-level param typing.
+            extra_body={"reasoning_effort": "none"},
         )
 
-        raw = response.choices[0].message.content.strip()
+        raw = (response.choices[0].message.content or "").strip()
+        if not raw:
+            logger.error("Vision model returned an empty completion")
+            raise ValueError("Vision model returned an empty response")
+
+        raw = _extract_json_payload(raw)
 
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as e:
-            logger.error("Vision model returned invalid JSON: %s", e)
+            # Log a tail slice too — truncation shows up at the end, not the
+            # start. Head alone hid a max_tokens cutoff during debugging.
+            logger.error(
+                "Vision model returned invalid JSON: %s | head=%r | tail=%r | len=%d",
+                e,
+                raw[:300],
+                raw[-300:],
+                len(raw),
+            )
             raise ValueError(f"Vision model returned malformed JSON: {e}") from e
 
         if isinstance(parsed, list):
@@ -296,6 +338,43 @@ class AIService:
             f"{unassigned_section}\n\n"
             f"Shifts by day:{shifts_section}"
         )
+
+
+def _extract_json_payload(text: str) -> str:
+    """Return the JSON body from a raw model response.
+
+    Handles three things vision/reasoning models routinely mix in around the
+    actual JSON:
+      1. A ```json … ``` (or bare ```) markdown fence.
+      2. A leading <think>…</think> reasoning block (qwen3 and other
+         reasoning models emit these when reasoning isn't suppressed).
+      3. Arbitrary prose before/after the object.
+
+    Strategy: strip fences, drop any <think> blocks, then slice from the first
+    '{' to the last '}'. If no braces are found, return the stripped text and
+    let json.loads raise — the caller logs the raw payload for debugging.
+    """
+    stripped = text.strip()
+
+    if stripped.startswith("```"):
+        stripped = stripped.removeprefix("```json").removeprefix("```").lstrip("\n")
+        if stripped.endswith("```"):
+            stripped = stripped[:-3]
+        stripped = stripped.strip()
+
+    stripped = re.sub(r"<think>.*?</think>", "", stripped, flags=re.DOTALL).strip()
+
+    # Slice to the outermost JSON container — object or array — so any leading
+    # apologies / trailing prose the model tacks on gets dropped.
+    candidates = [
+        (stripped.find(open_c), stripped.rfind(close_c))
+        for open_c, close_c in (("{", "}"), ("[", "]"))
+    ]
+    valid = [(f, l) for f, l in candidates if f != -1 and l > f]
+    if valid:
+        first, last = min(valid, key=lambda fl: fl[0])
+        return stripped[first : last + 1]
+    return stripped
 
 
 def _validate_analysis_shape(data: Dict[str, Any]) -> None:
